@@ -129,5 +129,5 @@ def get_analytics():
         len(all_records),
     )
     return jsonify(
-        compute_analytics(session_records, weekly_records, monthly_records, all_records, session_cutoff, weekly_cutoff)
+        compute_analytics(session_records, weekly_records, monthly_records, all_records, session_cutoff, weekly_cutoff, monthly_cutoff)
     )

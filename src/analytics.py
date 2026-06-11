@@ -106,6 +106,7 @@ def compute_analytics(
     all_records: list[UsageRecord],
     session_cutoff: datetime,
     weekly_cutoff: datetime,
+    monthly_cutoff: datetime,
 ) -> dict:
     now = datetime.now(timezone.utc)
 
@@ -116,8 +117,6 @@ def compute_analytics(
     weekly_cost = 0.0
     total_input = total_output = total_cache_create = total_cache_read = 0
     total_web_searches = total_web_fetches = 0
-    cost_by_day: dict = defaultdict(float)
-    sessions_by_day: dict[object, set] = defaultdict(set)
     model_tokens: dict[str, int] = defaultdict(int)
     project_tokens: dict[str, int] = defaultdict(int)
     skill_tokens: dict[str, int] = defaultdict(int)
@@ -132,11 +131,6 @@ def compute_analytics(
         total_web_searches += r.web_searches
         total_web_fetches += r.web_fetches
 
-        day = r.timestamp.date()  # naive UTC from DB
-        cost_by_day[day] += cost
-        if r.session_id:
-            sessions_by_day[day].add(r.session_id)
-
         tok = _total_tokens(r)
         model_tokens[r.model] += tok
         project_tokens[r.project] += tok
@@ -150,10 +144,20 @@ def compute_analytics(
 
     all_tokens = max(1, total_input + total_output + total_cache_create + total_cache_read)
 
-    days = [(now - timedelta(days=6 - i)).date() for i in range(7)]
-    daily_cost = [{"date": str(d), "value": cost_by_day.get(d, 0.0)} for d in days]
-    daily_sessions = [{"date": str(d), "value": len(sessions_by_day.get(d, set()))} for d in days]
-    today_cost = cost_by_day.get(days[-1], 0.0)
+    daily_cost_by_day: dict = defaultdict(float)
+    daily_sessions_by_day: dict[object, set] = defaultdict(set)
+    for r in monthly_records:
+        day = r.timestamp.date()
+        daily_cost_by_day[day] += estimated_cost(r)
+        if r.session_id:
+            daily_sessions_by_day[day].add(r.session_id)
+
+    cutoff_date = monthly_cutoff.date()
+    num_days = min((now.date() - cutoff_date).days + 1, 30)
+    days = [cutoff_date + timedelta(days=i) for i in range(num_days)]
+    daily_cost = [{"date": str(d), "value": daily_cost_by_day.get(d, 0.0)} for d in days]
+    daily_sessions = [{"date": str(d), "value": len(daily_sessions_by_day.get(d, set()))} for d in days]
+    today_cost = daily_cost_by_day.get(days[-1], 0.0)
 
     return {
         "session_cost": session_cost,
