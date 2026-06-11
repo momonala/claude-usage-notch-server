@@ -100,6 +100,7 @@ def compute_analytics(
     session_records: list[UsageRecord],
     weekly_records: list[UsageRecord],
     monthly_records: list[UsageRecord],
+    all_records: list[UsageRecord],
     session_cutoff: datetime,
     weekly_cutoff: datetime,
 ) -> dict:
@@ -107,6 +108,7 @@ def compute_analytics(
 
     session_cost = sum(estimated_cost(r) for r in session_records)
     monthly_cost = sum(estimated_cost(r) for r in monthly_records)
+    lifetime_cost = sum(estimated_cost(r) for r in all_records)
 
     weekly_cost = 0.0
     total_input = total_output = total_cache_create = total_cache_read = 0
@@ -155,6 +157,7 @@ def compute_analytics(
         "today_cost": today_cost,
         "weekly_cost": weekly_cost,
         "month_cost": monthly_cost,
+        "lifetime_cost": lifetime_cost,
         "cache_hit_rate": cache_hit_rate,
         "cache_savings_usd": cache_savings,
         "token_types": {

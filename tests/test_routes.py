@@ -122,6 +122,7 @@ def test_analytics_returns_expected_shape_on_empty_db(client):
         "today_cost",
         "weekly_cost",
         "month_cost",
+        "lifetime_cost",
         "cache_hit_rate",
         "cache_savings_usd",
         "total_web_searches",
@@ -181,6 +182,7 @@ def test_analytics_aggregates_costs_correctly(client):
     assert abs(body["session_cost"] - sonnet_input_rate) < 0.001
     assert abs(body["weekly_cost"] - sonnet_input_rate * 2) < 0.001
     assert abs(body["month_cost"] - sonnet_input_rate * 2) < 0.001
+    assert abs(body["lifetime_cost"] - sonnet_input_rate * 2) < 0.001
 
 
 def test_analytics_missing_params_returns_400(client):

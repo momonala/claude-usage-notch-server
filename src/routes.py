@@ -111,21 +111,23 @@ def get_analytics():
         return jsonify({"error": str(exc)}), 400
 
     with session_scope() as db:
-        monthly_records = db.scalars(
-            select(UsageRecord).where(UsageRecord.timestamp >= monthly_cutoff).order_by(UsageRecord.timestamp)
+        all_records = db.scalars(
+            select(UsageRecord).order_by(UsageRecord.timestamp)
         ).all()
 
-    # Records are sorted by timestamp; bisect avoids two O(n) linear scans.
-    timestamps = [r.timestamp for r in monthly_records]
-    weekly_records = monthly_records[bisect.bisect_left(timestamps, weekly_cutoff) :]
-    session_records = monthly_records[bisect.bisect_left(timestamps, session_cutoff) :]
+    # Records are sorted by timestamp; bisect avoids multiple O(n) linear scans.
+    timestamps = [r.timestamp for r in all_records]
+    monthly_records = all_records[bisect.bisect_left(timestamps, monthly_cutoff) :]
+    weekly_records  = all_records[bisect.bisect_left(timestamps, weekly_cutoff) :]
+    session_records = all_records[bisect.bisect_left(timestamps, session_cutoff) :]
 
     logger.info(
-        "GET /api/analytics: session=%d weekly=%d monthly=%d records",
+        "GET /api/analytics: session=%d weekly=%d monthly=%d all=%d records",
         len(session_records),
         len(weekly_records),
         len(monthly_records),
+        len(all_records),
     )
     return jsonify(
-        compute_analytics(session_records, weekly_records, monthly_records, session_cutoff, weekly_cutoff)
+        compute_analytics(session_records, weekly_records, monthly_records, all_records, session_cutoff, weekly_cutoff)
     )
