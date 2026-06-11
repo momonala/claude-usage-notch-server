@@ -19,9 +19,11 @@ from src.models import format_timestamp
 # ---------------------------------------------------------------------------
 
 _MODEL_RATES: dict[str, tuple[float, float]] = {
-    "opus": (15.0, 75.0),
-    "haiku": (0.80, 4.0),
-    "sonnet": (3.0, 15.0),
+    "fable":  (10.0, 50.0),
+    "mythos": (10.0, 50.0),
+    "opus":   (5.0,  25.0),
+    "haiku":  (1.0,   5.0),
+    "sonnet": (3.0,  15.0),
 }
 _DEFAULT_RATES = (3.0, 15.0)
 
@@ -36,7 +38,8 @@ def _model_rates(model: str) -> tuple[float, float]:
 def estimated_cost(r: UsageRecord) -> float:
     input_rate, output_rate = _model_rates(r.model)
     return (
-        (r.input_tokens + r.cache_creation_tokens) * input_rate / 1_000_000
+        r.input_tokens * input_rate / 1_000_000
+        + r.cache_creation_tokens * input_rate * 1.25 / 1_000_000
         + r.output_tokens * output_rate / 1_000_000
         + r.cache_read_tokens * input_rate * 0.1 / 1_000_000
     )
