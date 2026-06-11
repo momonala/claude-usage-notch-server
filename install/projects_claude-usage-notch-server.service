@@ -1,0 +1,12 @@
+[Unit]
+Description=Claude usage notch server (Flask API)
+After=multi-user.target
+
+[Service]
+WorkingDirectory=/home/mnalavadi/claude-usage-notch-server
+Type=idle
+ExecStart=/home/mnalavadi/.local/bin/uv run app
+User=mnalavadi
+
+[Install]
+WantedBy=multi-user.target
