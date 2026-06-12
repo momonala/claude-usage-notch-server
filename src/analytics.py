@@ -19,11 +19,11 @@ from src.models import format_timestamp
 # ---------------------------------------------------------------------------
 
 _MODEL_RATES: dict[str, tuple[float, float]] = {
-    "fable":  (10.0, 50.0),
+    "fable": (10.0, 50.0),
     "mythos": (10.0, 50.0),
-    "opus":   (5.0,  25.0),
-    "haiku":  (1.0,   5.0),
-    "sonnet": (3.0,  15.0),
+    "opus": (5.0, 25.0),
+    "haiku": (1.0, 5.0),
+    "sonnet": (3.0, 15.0),
 }
 _DEFAULT_RATES = (3.0, 15.0)
 
@@ -35,13 +35,30 @@ def _model_rates(model: str) -> tuple[float, float]:
     return _DEFAULT_RATES
 
 
-def estimated_cost(r: UsageRecord) -> float:
-    input_rate, output_rate = _model_rates(r.model)
+def estimated_cost_fields(
+    model: str,
+    input_tokens: int,
+    cache_creation_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int,
+) -> float:
+    """Estimated USD cost from raw token counts.
+
+    Kept field-based (not record-based) so callers can sum lifetime cost from a
+    column-limited query without hydrating full ORM rows for all of history.
+    """
+    input_rate, output_rate = _model_rates(model)
     return (
-        r.input_tokens * input_rate / 1_000_000
-        + r.cache_creation_tokens * input_rate * 1.25 / 1_000_000
-        + r.output_tokens * output_rate / 1_000_000
-        + r.cache_read_tokens * input_rate * 0.1 / 1_000_000
+        input_tokens * input_rate / 1_000_000
+        + cache_creation_tokens * input_rate * 1.25 / 1_000_000
+        + output_tokens * output_rate / 1_000_000
+        + cache_read_tokens * input_rate * 0.1 / 1_000_000
+    )
+
+
+def estimated_cost(r: UsageRecord) -> float:
+    return estimated_cost_fields(
+        r.model, r.input_tokens, r.cache_creation_tokens, r.output_tokens, r.cache_read_tokens
     )
 
 
@@ -77,10 +94,16 @@ def _make_buckets(
     cutoff is naive UTC (as stored by SQLAlchemy/SQLite).
     """
     if unit == "minute":
-        truncate = lambda ts: ts.replace(second=0, microsecond=0)  # noqa: E731
+
+        def truncate(ts: datetime) -> datetime:
+            return ts.replace(second=0, microsecond=0)
+
         delta = timedelta(minutes=1)
     else:
-        truncate = lambda ts: ts.replace(minute=0, second=0, microsecond=0)  # noqa: E731
+
+        def truncate(ts: datetime) -> datetime:
+            return ts.replace(minute=0, second=0, microsecond=0)
+
         delta = timedelta(hours=1)
 
     start = truncate(cutoff)
@@ -103,7 +126,7 @@ def compute_analytics(
     session_records: list[UsageRecord],
     weekly_records: list[UsageRecord],
     monthly_records: list[UsageRecord],
-    all_records: list[UsageRecord],
+    lifetime_cost: float,
     session_cutoff: datetime,
     weekly_cutoff: datetime,
     monthly_cutoff: datetime,
@@ -112,7 +135,6 @@ def compute_analytics(
 
     session_cost = sum(estimated_cost(r) for r in session_records)
     monthly_cost = sum(estimated_cost(r) for r in monthly_records)
-    lifetime_cost = sum(estimated_cost(r) for r in all_records)
 
     weekly_cost = 0.0
     total_input = total_output = total_cache_create = total_cache_read = 0
@@ -139,8 +161,11 @@ def compute_analytics(
 
     cacheable_denom = total_input + total_cache_read + total_cache_create
     cache_hit_rate = total_cache_read / cacheable_denom if cacheable_denom > 0 else 0.0
-    avg_input_rate = (weekly_cost / max(1, cacheable_denom) * 1_000_000) if weekly_records else 3.0
-    cache_savings = total_cache_read * avg_input_rate * 0.9 / 1_000_000
+    # Rough blended $/Mtok over the week (total cost spread across cacheable
+    # tokens). Only used to estimate cache savings below — not a precise per-token
+    # input rate, hence "blended".
+    blended_rate = (weekly_cost / max(1, cacheable_denom) * 1_000_000) if weekly_records else 3.0
+    cache_savings = total_cache_read * blended_rate * 0.9 / 1_000_000
 
     all_tokens = max(1, total_input + total_output + total_cache_create + total_cache_read)
 

@@ -93,6 +93,10 @@ def test_post_rejects_non_array(client):
     assert client.post("/api/records", json={"uuid": "x"}).status_code == 400
 
 
+def test_get_rejects_invalid_since(client):
+    assert client.get("/api/records?since=not-a-timestamp").status_code == 400
+
+
 def test_post_large_batch_stays_under_variable_limit(client):
     # A first sync can push the whole history at once; this must not exceed
     # SQLite's bound-variable ceiling (regression test for the chunked upsert).
@@ -193,6 +197,15 @@ def test_analytics_aggregates_costs_correctly(client):
 def test_analytics_missing_params_returns_400(client):
     assert client.get("/api/analytics").status_code == 400
     assert client.get("/api/analytics?session_since=2026-06-11T07:00:00.000Z").status_code == 400
+
+
+def test_analytics_rejects_invalid_timestamp(client):
+    bad = (
+        "session_since=not-a-timestamp"
+        "&weekly_since=2026-06-05T00:00:00.000Z"
+        "&monthly_since=2026-05-13T00:00:00.000Z"
+    )
+    assert client.get(f"/api/analytics?{bad}").status_code == 400
 
 
 def test_analytics_bucket_tokens_sum_to_total(client):

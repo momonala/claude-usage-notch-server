@@ -31,9 +31,9 @@ DATABASE_URL = f"sqlite:///{DB_PATH}"
 
 def config_cli(
     all: bool = typer.Option(False, "--all", help="Show all configuration values"),
-    project_name: bool = typer.Option(False, "--project-name", help=PROJECT_NAME),
-    project_version: bool = typer.Option(False, "--project-version", help=PROJECT_VERSION),
-    flask_port: bool = typer.Option(False, "--flask-port", help=str(FLASK_PORT)),
+    project_name: bool = typer.Option(False, "--project-name", help="Print the project name"),
+    project_version: bool = typer.Option(False, "--project-version", help="Print the project version"),
+    flask_port: bool = typer.Option(False, "--flask-port", help="Print the Flask port"),
 ) -> None:
     """Expose non-secret configuration to install scripts."""
     if all:
@@ -42,13 +42,13 @@ def config_cli(
         typer.echo(f"flask_port={FLASK_PORT}")
         return
 
-    param_map = {
-        project_name: PROJECT_NAME,
-        project_version: PROJECT_VERSION,
-        flask_port: FLASK_PORT,
-    }
-
-    for is_set, value in param_map.items():
+    # (flag, value) pairs, not a dict — two False flags would collide on a single
+    # False key.
+    for is_set, value in (
+        (project_name, PROJECT_NAME),
+        (project_version, PROJECT_VERSION),
+        (flask_port, FLASK_PORT),
+    ):
         if is_set:
             typer.echo(value)
             return

@@ -9,6 +9,7 @@ GET  /api/analytics?session_since=&weekly_since=&monthly_since=
 
 import bisect
 import logging
+from collections.abc import Iterator
 
 from flask import Blueprint
 from flask import jsonify
@@ -17,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from src.analytics import compute_analytics
+from src.analytics import estimated_cost_fields
 from src.database import session_scope
 from src.models import UsageRecord
 from src.models import parse_timestamp
@@ -29,7 +31,7 @@ bp = Blueprint("api", __name__)
 _LOOKUP_CHUNK = 500
 
 
-def _chunked(seq: list, size: int):
+def _chunked(seq: list[str], size: int) -> Iterator[list[str]]:
     for start in range(0, len(seq), size):
         yield seq[start : start + size]
 
@@ -69,6 +71,9 @@ def post_records():
         stmt = sqlite_insert(UsageRecord).on_conflict_do_nothing(index_elements=["uuid"])
         session.execute(stmt, list(rows.values()))
 
+    # Best-effort counts: with ON CONFLICT DO NOTHING, the pre-existing rows are
+    # exactly the skipped ones and the rest insert, so this is derived rather than
+    # read back from the statement's rowcount.
     skipped = len(existing)
     inserted = len(uuids) - skipped
     logger.info("POST /api/records: inserted=%d skipped=%d", inserted, skipped)
@@ -111,23 +116,46 @@ def get_analytics():
         return jsonify({"error": str(exc)}), 400
 
     with session_scope() as db:
-        all_records = db.scalars(
-            select(UsageRecord).order_by(UsageRecord.timestamp)
+        # The windowed work only needs records from monthly_cutoff onward — filter
+        # at the DB instead of hydrating all of history.
+        windowed = db.scalars(
+            select(UsageRecord).where(UsageRecord.timestamp >= monthly_cutoff).order_by(UsageRecord.timestamp)
         ).all()
+        # Lifetime cost is the only figure needing the full history; pull just the
+        # cost columns rather than whole ORM rows.
+        lifetime_cost = sum(
+            estimated_cost_fields(*row)
+            for row in db.execute(
+                select(
+                    UsageRecord.model,
+                    UsageRecord.input_tokens,
+                    UsageRecord.cache_creation_tokens,
+                    UsageRecord.output_tokens,
+                    UsageRecord.cache_read_tokens,
+                )
+            ).all()
+        )
 
     # Records are sorted by timestamp; bisect avoids multiple O(n) linear scans.
-    timestamps = [r.timestamp for r in all_records]
-    monthly_records = all_records[bisect.bisect_left(timestamps, monthly_cutoff) :]
-    weekly_records  = all_records[bisect.bisect_left(timestamps, weekly_cutoff) :]
-    session_records = all_records[bisect.bisect_left(timestamps, session_cutoff) :]
+    timestamps = [r.timestamp for r in windowed]
+    monthly_records = windowed
+    weekly_records = windowed[bisect.bisect_left(timestamps, weekly_cutoff) :]
+    session_records = windowed[bisect.bisect_left(timestamps, session_cutoff) :]
 
     logger.info(
-        "GET /api/analytics: session=%d weekly=%d monthly=%d all=%d records",
+        "GET /api/analytics: session=%d weekly=%d monthly=%d records",
         len(session_records),
         len(weekly_records),
         len(monthly_records),
-        len(all_records),
     )
     return jsonify(
-        compute_analytics(session_records, weekly_records, monthly_records, all_records, session_cutoff, weekly_cutoff, monthly_cutoff)
+        compute_analytics(
+            session_records,
+            weekly_records,
+            monthly_records,
+            lifetime_cost,
+            session_cutoff,
+            weekly_cutoff,
+            monthly_cutoff,
+        )
     )

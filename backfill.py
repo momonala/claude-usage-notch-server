@@ -13,8 +13,6 @@ import argparse
 import json
 import sys
 import urllib.request
-from datetime import datetime
-from datetime import timezone
 from pathlib import Path
 
 
