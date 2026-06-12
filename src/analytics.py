@@ -243,7 +243,9 @@ def compute_analytics(
 
     # Spend/sessions series; bucket width follows the lookback granularity
     # (hourly for 1D, daily for 7D/30D, monthly for All).
-    daily_cost, daily_sessions = _build_series(lookback_records, lookback_costs, granularity, lookback_cutoff, now)
+    daily_cost, daily_sessions = _build_series(
+        lookback_records, lookback_costs, granularity, lookback_cutoff, now
+    )
 
     # "Today" is a calendar-day figure independent of the series granularity.
     today = now.date()

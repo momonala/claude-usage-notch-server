@@ -9,7 +9,12 @@ dependencies = [
     "typer>=0.9.0",
     "flask>=3.0",
     "sqlalchemy>=2.0",
-    "schedule>=1.2",
+    "pytest>=9.0.2",
+    "pytest-cov>=4.0.0",
+    "coverage>=7.13.5",
+    "black>=26.3.1",
+    "ruff>=0.15.7",
+    "isort>=8.0.1",
 ]
 
 [project.optional-dependencies]
@@ -39,7 +44,6 @@ packages = ["."]
 [project.scripts]
 config = "src.config:main"
 app = "src.app:main"
-scheduler = "src.scheduler:main"
 
 [tool.black]
 line-length = 110
