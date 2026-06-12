@@ -73,7 +73,7 @@ migration tooling, since it's a single-user store with no reverse-compatibility 
 | `/status` | GET | Health check → `{"status": "ok"}` |
 | `/api/records` | POST | Upsert a batch (idempotent by `uuid`) |
 | `/api/records` | GET | Records with `timestamp >= since` |
-| `/api/analytics` | GET | Pre-aggregated chart data for the session/weekly/monthly windows |
+| `/api/analytics` | GET | Pre-aggregated chart data for the session/weekly/month + lookback windows |
 
 ### POST /api/records
 
@@ -98,17 +98,23 @@ Returns a JSON array ordered by `timestamp`. Omit `since` for everything.
 
 ### GET /api/analytics
 
-Aggregates records into the chart payload the app renders. All three params are
+Aggregates records into the chart payload the app renders. All four params are
 required ISO8601 timestamps marking the start of each window:
 
 ```bash
-curl 'http://localhost:5014/api/analytics?session_since=2026-06-12T07:00:00Z&weekly_since=2026-06-06T00:00:00Z&monthly_since=2026-05-13T00:00:00Z'
+curl 'http://localhost:5014/api/analytics?session_since=2026-06-12T07:00:00Z&weekly_since=2026-06-06T00:00:00Z&month_since=2026-05-13T00:00:00Z&lookback_since=2026-05-13T00:00:00Z'
 ```
+
+`session_since` / `weekly_since` / `month_since` are fixed reference windows (5h / 7d /
+30d) driving the cost pills and the session/weekly charts. `lookback_since` follows the
+app's 7D/30D/All selector and drives the period-labeled breakdowns and daily charts —
+keep it independent of the fixed windows so, e.g., switching to 7D doesn't shrink the
+"Month" figure.
 
 Returns costs (`session_cost`, `weekly_cost`, `month_cost`, `lifetime_cost`, …),
 `cache_hit_rate`, token-type fractions, `model_breakdown` / `project_breakdown` /
 `skill_breakdown`, `daily_cost` / `daily_sessions`, and per-minute `session_buckets` +
-per-hour `weekly_buckets`. The windowed work is filtered at the DB to `monthly_since`;
+per-hour `weekly_buckets`. The DB fetch floor is `min(lookback_since, month_since)`;
 only `lifetime_cost` scans the full history (cost columns only). See `src/analytics.py`.
 
 ### Record schema

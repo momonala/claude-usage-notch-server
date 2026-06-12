@@ -98,28 +98,34 @@ def get_records():
 
 @bp.get("/api/analytics")
 def get_analytics():
-    """Return pre-aggregated chart data covering session, weekly, and monthly windows.
+    """Return pre-aggregated chart data covering session, weekly, month, and lookback windows.
 
     Query params (all ISO8601):
         session_since   — start of the 5-hour session window
         weekly_since    — start of the 7-day weekly window
-        monthly_since   — start of the 30-day monthly window
+        month_since     — start of the trailing 30-day window (the "Month" figure)
+        lookback_since  — start of the user-selected lookback; drives the breakdowns
+                          and daily charts, independent of the fixed windows above
     """
-    keys = ("session_since", "weekly_since", "monthly_since")
+    keys = ("session_since", "weekly_since", "month_since", "lookback_since")
     raw = [request.args.get(k) for k in keys]
     if not all(raw):
-        return jsonify({"error": "session_since, weekly_since, and monthly_since are required"}), 400
+        return jsonify({"error": f"{', '.join(keys)} are required"}), 400
     try:
         # Strip tzinfo: SQLite/SQLAlchemy stores naive UTC datetimes.
-        session_cutoff, weekly_cutoff, monthly_cutoff = [parse_timestamp(v).replace(tzinfo=None) for v in raw]
+        session_cutoff, weekly_cutoff, month_cutoff, lookback_cutoff = [
+            parse_timestamp(v).replace(tzinfo=None) for v in raw
+        ]
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
 
+    # Fetch enough history to cover both the lookback window and the fixed 30-day
+    # month — the lookback can be shorter (7D) or longer (All) than a month.
+    fetch_cutoff = min(lookback_cutoff, month_cutoff)
+
     with session_scope() as db:
-        # The windowed work only needs records from monthly_cutoff onward — filter
-        # at the DB instead of hydrating all of history.
         windowed = db.scalars(
-            select(UsageRecord).where(UsageRecord.timestamp >= monthly_cutoff).order_by(UsageRecord.timestamp)
+            select(UsageRecord).where(UsageRecord.timestamp >= fetch_cutoff).order_by(UsageRecord.timestamp)
         ).all()
         # Lifetime cost is the only figure needing the full history; pull just the
         # cost columns rather than whole ORM rows.
@@ -138,24 +144,27 @@ def get_analytics():
 
     # Records are sorted by timestamp; bisect avoids multiple O(n) linear scans.
     timestamps = [r.timestamp for r in windowed]
-    monthly_records = windowed
+    lookback_records = windowed[bisect.bisect_left(timestamps, lookback_cutoff) :]
+    month_records = windowed[bisect.bisect_left(timestamps, month_cutoff) :]
     weekly_records = windowed[bisect.bisect_left(timestamps, weekly_cutoff) :]
     session_records = windowed[bisect.bisect_left(timestamps, session_cutoff) :]
 
     logger.info(
-        "GET /api/analytics: session=%d weekly=%d monthly=%d records",
+        "GET /api/analytics: session=%d weekly=%d month=%d lookback=%d records",
         len(session_records),
         len(weekly_records),
-        len(monthly_records),
+        len(month_records),
+        len(lookback_records),
     )
     return jsonify(
         compute_analytics(
             session_records,
             weekly_records,
-            monthly_records,
+            month_records,
+            lookback_records,
             lifetime_cost,
             session_cutoff,
             weekly_cutoff,
-            monthly_cutoff,
+            lookback_cutoff,
         )
     )

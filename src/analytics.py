@@ -125,27 +125,32 @@ def _make_buckets(
 def compute_analytics(
     session_records: list[UsageRecord],
     weekly_records: list[UsageRecord],
-    monthly_records: list[UsageRecord],
+    month_records: list[UsageRecord],
+    lookback_records: list[UsageRecord],
     lifetime_cost: float,
     session_cutoff: datetime,
     weekly_cutoff: datetime,
-    monthly_cutoff: datetime,
+    lookback_cutoff: datetime,
 ) -> dict:
     now = datetime.now(timezone.utc)
 
+    # session/weekly/month are fixed reference windows; lookback follows the
+    # user's period selector and drives the breakdowns + daily charts below.
     session_cost = sum(estimated_cost(r) for r in session_records)
-    monthly_cost = sum(estimated_cost(r) for r in monthly_records)
+    weekly_cost = sum(estimated_cost(r) for r in weekly_records)
+    month_cost = sum(estimated_cost(r) for r in month_records)
+    lookback_cost = sum(estimated_cost(r) for r in lookback_records)
 
-    weekly_cost = 0.0
+    # Token breakdowns, cache, model/project/skill mix, and web counts are all
+    # labeled with the selected lookback period in the UI, so they aggregate over
+    # the lookback window — not a fixed 7-day or 30-day window.
     total_input = total_output = total_cache_create = total_cache_read = 0
     total_web_searches = total_web_fetches = 0
     model_tokens: dict[str, int] = defaultdict(int)
     project_tokens: dict[str, int] = defaultdict(int)
     skill_tokens: dict[str, int] = defaultdict(int)
 
-    for r in weekly_records:
-        cost = estimated_cost(r)
-        weekly_cost += cost
+    for r in lookback_records:
         total_input += r.input_tokens
         total_output += r.output_tokens
         total_cache_create += r.cache_creation_tokens
@@ -161,34 +166,40 @@ def compute_analytics(
 
     cacheable_denom = total_input + total_cache_read + total_cache_create
     cache_hit_rate = total_cache_read / cacheable_denom if cacheable_denom > 0 else 0.0
-    # Rough blended $/Mtok over the week (total cost spread across cacheable
-    # tokens). Only used to estimate cache savings below — not a precise per-token
-    # input rate, hence "blended".
-    blended_rate = (weekly_cost / max(1, cacheable_denom) * 1_000_000) if weekly_records else 3.0
+    # Rough blended $/Mtok over the lookback window (total cost spread across
+    # cacheable tokens). Only used to estimate cache savings below — not a precise
+    # per-token input rate, hence "blended".
+    blended_rate = (lookback_cost / max(1, cacheable_denom) * 1_000_000) if lookback_records else 3.0
     cache_savings = total_cache_read * blended_rate * 0.9 / 1_000_000
 
     all_tokens = max(1, total_input + total_output + total_cache_create + total_cache_read)
 
     daily_cost_by_day: dict = defaultdict(float)
     daily_sessions_by_day: dict[object, set] = defaultdict(set)
-    for r in monthly_records:
+    for r in lookback_records:
         day = r.timestamp.date()
         daily_cost_by_day[day] += estimated_cost(r)
         if r.session_id:
             daily_sessions_by_day[day].add(r.session_id)
 
-    cutoff_date = monthly_cutoff.date()
-    num_days = min((now.date() - cutoff_date).days + 1, 30)
-    days = [cutoff_date + timedelta(days=i) for i in range(num_days)]
+    # Day columns always end today and span at most 30 days. Anchoring to today
+    # (rather than walking forward from the cutoff) keeps "All" — whose cutoff is
+    # the epoch — showing the last 30 days instead of 30 days starting in 1970.
+    end_date = now.date()
+    cutoff_date = lookback_cutoff.date()
+    start_date = max(cutoff_date, end_date - timedelta(days=29))
+    days = [start_date + timedelta(days=i) for i in range((end_date - start_date).days + 1)]
     daily_cost = [{"date": str(d), "value": daily_cost_by_day.get(d, 0.0)} for d in days]
     daily_sessions = [{"date": str(d), "value": len(daily_sessions_by_day.get(d, set()))} for d in days]
-    today_cost = daily_cost_by_day.get(days[-1], 0.0)
+    # Keyed by the actual current date — not days[-1], which only lands on today
+    # when the cutoff is within the last 30 days.
+    today_cost = daily_cost_by_day.get(end_date, 0.0)
 
     return {
         "session_cost": session_cost,
         "today_cost": today_cost,
         "weekly_cost": weekly_cost,
-        "month_cost": monthly_cost,
+        "month_cost": month_cost,
         "lifetime_cost": lifetime_cost,
         "cache_hit_rate": cache_hit_rate,
         "cache_savings_usd": cache_savings,

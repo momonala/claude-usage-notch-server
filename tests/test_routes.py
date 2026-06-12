@@ -1,6 +1,8 @@
 """Tests for the records API: health, upsert idempotency, and time filtering."""
 
 from datetime import date
+from datetime import datetime
+from datetime import timezone
 
 import pytest
 
@@ -114,7 +116,8 @@ def test_post_large_batch_stays_under_variable_limit(client):
 _ANALYTICS_PARAMS = (
     "session_since=2026-06-11T07:00:00.000Z"
     "&weekly_since=2026-06-05T00:00:00.000Z"
-    "&monthly_since=2026-05-13T00:00:00.000Z"
+    "&month_since=2026-05-13T00:00:00.000Z"
+    "&lookback_since=2026-05-13T00:00:00.000Z"
 )
 
 
@@ -145,9 +148,9 @@ def test_analytics_returns_expected_shape_on_empty_db(client):
     assert isinstance(body["skill_breakdown"], list)
     assert isinstance(body["daily_cost"], list)
     assert isinstance(body["daily_sessions"], list)
-    # Daily series spans monthly_since -> today, capped at 30 days.
-    monthly_since = date(2026, 5, 13)
-    expected_days = min((date.today() - monthly_since).days + 1, 30)
+    # Daily series spans lookback_since -> today, capped at 30 days.
+    lookback_since = date(2026, 5, 13)
+    expected_days = min((date.today() - lookback_since).days + 1, 30)
     assert len(body["daily_cost"]) == expected_days
     assert len(body["daily_sessions"]) == expected_days
 
@@ -194,6 +197,120 @@ def test_analytics_aggregates_costs_correctly(client):
     assert abs(body["lifetime_cost"] - sonnet_input_rate * 2) < 0.001
 
 
+def test_analytics_breakdowns_span_monthly_window(client):
+    # Token/model/project/skill breakdowns are labeled with the lookback period
+    # in the UI, so they must aggregate over the monthly window — not a fixed
+    # 7-day window. Regression for 7D and 30D reporting identical breakdowns.
+    client.post(
+        "/api/records",
+        json=[
+            _record(
+                "weekly",
+                "2026-06-09T00:00:00.000Z",  # inside the 7-day window
+                project="ProjWeekly",
+                input_tokens=100,
+                output_tokens=0,
+                cache_creation_tokens=0,
+                cache_read_tokens=0,
+            ),
+            _record(
+                "monthly-only",
+                "2026-05-20T00:00:00.000Z",  # older than weekly, inside monthly
+                project="ProjMonthly",
+                input_tokens=900,
+                output_tokens=0,
+                cache_creation_tokens=0,
+                cache_read_tokens=0,
+            ),
+        ],
+    )
+
+    body = client.get(f"/api/analytics?{_ANALYTICS_PARAMS}").get_json()
+
+    # Both records' input tokens are counted, not just the weekly one.
+    assert body["token_types"]["input_tokens"] == 1000
+    projects = {p["label"] for p in body["project_breakdown"]}
+    assert projects == {"ProjWeekly", "ProjMonthly"}
+
+
+def test_analytics_month_cost_independent_of_lookback(client):
+    # "Month" is a fixed trailing-30-day figure; switching the lookback selector
+    # (7D / 30D / All) must not change it. Regression for the Month pill tracking
+    # the selector instead of a real 30-day window.
+    client.post(
+        "/api/records",
+        json=[
+            _record(
+                "recent",
+                "2026-06-11T00:00:00.000Z",  # inside 7 days
+                input_tokens=1_000_000,
+                output_tokens=0,
+                cache_creation_tokens=0,
+                cache_read_tokens=0,
+            ),
+            _record(
+                "midmonth",
+                "2026-05-25T00:00:00.000Z",  # outside 7 days, inside 30
+                input_tokens=1_000_000,
+                output_tokens=0,
+                cache_creation_tokens=0,
+                cache_read_tokens=0,
+            ),
+        ],
+    )
+    base = (
+        "session_since=2026-06-11T07:00:00.000Z"
+        "&weekly_since=2026-06-05T00:00:00.000Z"
+        "&month_since=2026-05-13T00:00:00.000Z"
+    )
+
+    def month_cost(lookback_since: str) -> float:
+        body = client.get(f"/api/analytics?{base}&lookback_since={lookback_since}").get_json()
+        return body["month_cost"]
+
+    week = month_cost("2026-06-05T00:00:00.000Z")
+    month = month_cost("2026-05-13T00:00:00.000Z")
+    all_time = month_cost("1970-01-01T00:00:00.000Z")
+
+    # Both records fall in the trailing-30-day window → $6 regardless of lookback.
+    assert abs(week - 6.0) < 0.001
+    assert week == month == all_time
+
+
+def test_analytics_today_cost_anchored_to_current_date(client):
+    # "All" period cuts off at the epoch. today_cost and the day columns must
+    # still resolve to the current date, not days starting in 1970. Regression
+    # for the Today pill changing across lookback periods.
+    now = datetime.now(timezone.utc)
+    ts = now.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    client.post(
+        "/api/records",
+        json=[
+            _record(
+                "today",
+                ts,
+                model="claude-sonnet-4-6",
+                input_tokens=1_000_000,
+                output_tokens=0,
+                cache_creation_tokens=0,
+                cache_read_tokens=0,
+            )
+        ],
+    )
+
+    params = (
+        f"session_since={ts}"
+        f"&weekly_since={ts}"
+        "&month_since=1970-01-01T00:00:00.000Z"
+        "&lookback_since=1970-01-01T00:00:00.000Z"
+    )
+    body = client.get(f"/api/analytics?{params}").get_json()
+
+    assert abs(body["today_cost"] - 3.0) < 0.001  # 1M sonnet input @ $3/M
+    assert len(body["daily_cost"]) == 30  # last 30 days, capped
+    assert body["daily_cost"][-1]["date"] == str(now.date())
+
+
 def test_analytics_missing_params_returns_400(client):
     assert client.get("/api/analytics").status_code == 400
     assert client.get("/api/analytics?session_since=2026-06-11T07:00:00.000Z").status_code == 400
@@ -203,7 +320,8 @@ def test_analytics_rejects_invalid_timestamp(client):
     bad = (
         "session_since=not-a-timestamp"
         "&weekly_since=2026-06-05T00:00:00.000Z"
-        "&monthly_since=2026-05-13T00:00:00.000Z"
+        "&month_since=2026-05-13T00:00:00.000Z"
+        "&lookback_since=2026-05-13T00:00:00.000Z"
     )
     assert client.get(f"/api/analytics?{bad}").status_code == 400
 
