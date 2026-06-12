@@ -1,5 +1,7 @@
 """Tests for the records API: health, upsert idempotency, and time filtering."""
 
+from datetime import date
+
 import pytest
 
 from src.app import create_app
@@ -139,8 +141,11 @@ def test_analytics_returns_expected_shape_on_empty_db(client):
     assert isinstance(body["skill_breakdown"], list)
     assert isinstance(body["daily_cost"], list)
     assert isinstance(body["daily_sessions"], list)
-    assert len(body["daily_cost"]) == 7
-    assert len(body["daily_sessions"]) == 7
+    # Daily series spans monthly_since -> today, capped at 30 days.
+    monthly_since = date(2026, 5, 13)
+    expected_days = min((date.today() - monthly_since).days + 1, 30)
+    assert len(body["daily_cost"]) == expected_days
+    assert len(body["daily_sessions"]) == expected_days
 
     assert isinstance(body["session_buckets"], list)
     assert isinstance(body["weekly_buckets"], list)
