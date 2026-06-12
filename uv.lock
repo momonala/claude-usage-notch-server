@@ -11,8 +11,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
-exclude-newer-span = "P1W"
+exclude-newer = "2026-06-12T00:00:00Z"
 
 [[package]]
 name = "annotated-doc"
@@ -352,8 +351,15 @@ name = "claude-usage-notch-server"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "black" },
     { name = "flask" },
+    { name = "schedule" },
+    { name = "sqlalchemy" },
+    { name = "typer" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "black" },
     { name = "isort" },
     { name = "jupyter" },
     { name = "notebook" },
@@ -361,26 +367,24 @@ dependencies = [
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
-    { name = "schedule" },
-    { name = "sqlalchemy" },
-    { name = "typer" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "black" },
+    { name = "black", marker = "extra == 'dev'" },
     { name = "flask", specifier = ">=3.0" },
-    { name = "isort", specifier = ">=7.0.0" },
-    { name = "jupyter", specifier = ">=1.1.1" },
-    { name = "notebook", specifier = ">=7.5.1" },
-    { name = "pandas", specifier = ">=2.3.3" },
-    { name = "pytest", specifier = ">=8.0.0" },
-    { name = "pytest-cov", specifier = ">=4.0.0" },
-    { name = "ruff", specifier = ">=0.14.10" },
+    { name = "isort", marker = "extra == 'dev'", specifier = ">=7.0.0" },
+    { name = "jupyter", marker = "extra == 'dev'", specifier = ">=1.1.1" },
+    { name = "notebook", marker = "extra == 'dev'", specifier = ">=7.5.1" },
+    { name = "pandas", marker = "extra == 'dev'", specifier = ">=2.3.3" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.14.10" },
     { name = "schedule", specifier = ">=1.2" },
     { name = "sqlalchemy", specifier = ">=2.0" },
     { name = "typer", specifier = ">=0.9.0" },
 ]
+provides-extras = ["dev"]
 
 [[package]]
 name = "click"

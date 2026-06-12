@@ -6,18 +6,22 @@ authors = [{name = "Mohit Nalavadi"}]
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "pytest>=8.0.0",
-    "pytest-cov>=4.0.0",
-    "black",
-    "jupyter>=1.1.1",
-    "notebook>=7.5.1",
-    "pandas>=2.3.3",
-    "ruff>=0.14.10",
-    "isort>=7.0.0",
     "typer>=0.9.0",
     "flask>=3.0",
     "sqlalchemy>=2.0",
     "schedule>=1.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.0.0",
+    "black",
+    "ruff>=0.14.10",
+    "isort>=7.0.0",
+    "jupyter>=1.1.1",
+    "notebook>=7.5.1",
+    "pandas>=2.3.3",
 ]
 
 [tool.config]
@@ -71,4 +75,4 @@ exclude_lines = [
 ]
 
 [tool.uv]
-exclude-newer = "1 week"
+exclude-newer = "2026-06-12T00:00:00Z"

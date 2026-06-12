@@ -11,6 +11,7 @@ Usage:
 
 import argparse
 import json
+import math
 import sys
 import urllib.request
 from pathlib import Path
@@ -125,7 +126,7 @@ def main() -> None:
         return
 
     total_inserted = total_skipped = 0
-    batch_count = (len(records) + args.batch_size - 1) // args.batch_size
+    batch_count = math.ceil(len(records) / args.batch_size)
 
     for i in range(0, len(records), args.batch_size):
         batch = records[i : i + args.batch_size]

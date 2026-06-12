@@ -149,9 +149,9 @@ def test_analytics_returns_expected_shape_on_empty_db(client):
     assert isinstance(body["skill_breakdown"], list)
     assert isinstance(body["daily_cost"], list)
     assert isinstance(body["daily_sessions"], list)
-    # Daily series spans lookback_since -> today, capped at 30 days.
+    # Daily series spans lookback_since -> today (UTC), capped at 30 days.
     lookback_since = date(2026, 5, 13)
-    expected_days = min((date.today() - lookback_since).days + 1, 30)
+    expected_days = min((datetime.now(timezone.utc).date() - lookback_since).days + 1, 30)
     assert len(body["daily_cost"]) == expected_days
     assert len(body["daily_sessions"]) == expected_days
 
@@ -331,10 +331,7 @@ def test_analytics_hour_granularity_returns_24_buckets(client):
             )
         ],
     )
-    params = (
-        f"session_since={ts}&weekly_since={ts}&month_since={ts}"
-        f"&lookback_since={ts}&granularity=hour"
-    )
+    params = f"session_since={ts}&weekly_since={ts}&month_since={ts}" f"&lookback_since={ts}&granularity=hour"
     body = client.get(f"/api/analytics?{params}").get_json()
 
     assert len(body["daily_cost"]) == 24

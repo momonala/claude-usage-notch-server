@@ -7,6 +7,7 @@ The server aggregates records on demand via /api/analytics.
 
 from datetime import datetime
 from datetime import timezone
+from typing import ClassVar
 
 from sqlalchemy import DateTime
 from sqlalchemy import Index
@@ -78,7 +79,7 @@ class UsageRecord(Base):
 
     # Fields the client sends and the API returns. `ingested_at` is server-owned
     # and excluded from both directions.
-    _CLIENT_FIELDS = (
+    _CLIENT_FIELDS: ClassVar[tuple[str, ...]] = (
         "request_id",
         "session_id",
         "parent_uuid",

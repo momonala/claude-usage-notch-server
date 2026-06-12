@@ -27,8 +27,8 @@ def create_app() -> Flask:
 def main():
     app = create_app()
     logger = logging.getLogger(__name__)
-    logger.info(f"Starting server at http://{FLASK_HOST}:{FLASK_PORT}")
-    app.run(host=FLASK_HOST, port=FLASK_PORT, debug=True)
+    logger.info("Starting server at http://%s:%s", FLASK_HOST, FLASK_PORT)
+    app.run(host=FLASK_HOST, port=FLASK_PORT, debug=False)
 
 
 if __name__ == "__main__":

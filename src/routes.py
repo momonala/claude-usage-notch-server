@@ -51,7 +51,13 @@ def post_records():
     logger.debug("POST /api/records: received batch of %d", len(payload))
 
     # Deduplicate within the batch; last write wins for a repeated uuid.
-    rows = {item["uuid"]: UsageRecord.row_from_json(item) for item in payload}
+    # Skip malformed records missing a uuid rather than aborting the whole batch.
+    rows = {}
+    for item in payload:
+        if not isinstance(item, dict) or not item.get("uuid"):
+            logger.warning("POST /api/records: skipping record with missing uuid")
+            continue
+        rows[item["uuid"]] = UsageRecord.row_from_json(item)
     if not rows:
         return jsonify({"inserted": 0, "skipped": 0})
 
@@ -111,8 +117,9 @@ def get_analytics():
     """
     keys = ("session_since", "weekly_since", "month_since", "lookback_since")
     raw = [request.args.get(k) for k in keys]
-    if not all(raw):
-        return jsonify({"error": f"{', '.join(keys)} are required"}), 400
+    missing = [k for k, v in zip(keys, raw) if not v]
+    if missing:
+        return jsonify({"error": f"missing required params: {', '.join(missing)}"}), 400
     granularity = request.args.get("granularity", "day")
     if granularity not in ("hour", "day", "month"):
         return jsonify({"error": f"invalid granularity: {granularity}"}), 400
