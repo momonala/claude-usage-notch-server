@@ -81,6 +81,7 @@ secrets/
 *.mov
 
 # Project-specific generated files
+*.db
 prototyping/
 cache/
 event_cache.json
