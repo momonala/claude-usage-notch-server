@@ -81,6 +81,70 @@ def _to_ranked(grouped: dict[str, int], top: int) -> list[dict]:
     ]
 
 
+def _add_months(start: datetime, n: int) -> datetime:
+    """First-of-month `n` months after `start` (a month-aligned datetime)."""
+    idx = start.year * 12 + (start.month - 1) + n
+    return datetime(idx // 12, idx % 12 + 1, 1)
+
+
+def _build_series(
+    records: list[UsageRecord],
+    granularity: str,
+    lookback_cutoff: datetime,
+    now: datetime,
+) -> tuple[list[dict], list[dict]]:
+    """Bucket records into a spend series and a distinct-session-count series.
+
+    granularity selects both the bucket width and the span:
+      - "hour":  24 hourly buckets ending at the current hour (the 1D view)
+      - "month": monthly buckets from the earliest record's month to this one (All)
+      - "day":   daily buckets from the lookback cutoff to today, capped at 30 days
+
+    Bucket starts are emitted as ISO8601 timestamps (naive UTC, as stored).
+    """
+    now = now.replace(tzinfo=None)
+
+    if granularity == "hour":
+
+        def key(ts: datetime) -> datetime:
+            return ts.replace(minute=0, second=0, microsecond=0)
+
+        end = key(now)
+        slots = [end - timedelta(hours=i) for i in range(23, -1, -1)]
+    elif granularity == "month":
+
+        def key(ts: datetime) -> datetime:
+            return datetime(ts.year, ts.month, 1)
+
+        start = key(min((r.timestamp for r in records), default=now))
+        end = key(now)
+        slots = []
+        slot = start
+        while slot <= end:
+            slots.append(slot)
+            slot = _add_months(slot, 1)
+    else:  # "day"
+
+        def key(ts: datetime) -> datetime:
+            return datetime(ts.year, ts.month, ts.day)
+
+        end = key(now)
+        start = max(key(lookback_cutoff), end - timedelta(days=29))
+        slots = [start + timedelta(days=i) for i in range((end - start).days + 1)]
+
+    cost_by: dict[datetime, float] = defaultdict(float)
+    sessions_by: dict[datetime, set] = defaultdict(set)
+    for r in records:
+        slot = key(r.timestamp)
+        cost_by[slot] += estimated_cost(r)
+        if r.session_id:
+            sessions_by[slot].add(r.session_id)
+
+    cost_series = [{"date": format_timestamp(s), "value": cost_by.get(s, 0.0)} for s in slots]
+    sessions_series = [{"date": format_timestamp(s), "value": len(sessions_by.get(s, set()))} for s in slots]
+    return cost_series, sessions_series
+
+
 def _make_buckets(
     records: list[UsageRecord],
     cutoff: datetime,
@@ -131,6 +195,7 @@ def compute_analytics(
     session_cutoff: datetime,
     weekly_cutoff: datetime,
     lookback_cutoff: datetime,
+    granularity: str,
 ) -> dict:
     now = datetime.now(timezone.utc)
 
@@ -174,26 +239,13 @@ def compute_analytics(
 
     all_tokens = max(1, total_input + total_output + total_cache_create + total_cache_read)
 
-    daily_cost_by_day: dict = defaultdict(float)
-    daily_sessions_by_day: dict[object, set] = defaultdict(set)
-    for r in lookback_records:
-        day = r.timestamp.date()
-        daily_cost_by_day[day] += estimated_cost(r)
-        if r.session_id:
-            daily_sessions_by_day[day].add(r.session_id)
+    # Spend/sessions series; bucket width follows the lookback granularity
+    # (hourly for 1D, daily for 7D/30D, monthly for All).
+    daily_cost, daily_sessions = _build_series(lookback_records, granularity, lookback_cutoff, now)
 
-    # Day columns always end today and span at most 30 days. Anchoring to today
-    # (rather than walking forward from the cutoff) keeps "All" — whose cutoff is
-    # the epoch — showing the last 30 days instead of 30 days starting in 1970.
-    end_date = now.date()
-    cutoff_date = lookback_cutoff.date()
-    start_date = max(cutoff_date, end_date - timedelta(days=29))
-    days = [start_date + timedelta(days=i) for i in range((end_date - start_date).days + 1)]
-    daily_cost = [{"date": str(d), "value": daily_cost_by_day.get(d, 0.0)} for d in days]
-    daily_sessions = [{"date": str(d), "value": len(daily_sessions_by_day.get(d, set()))} for d in days]
-    # Keyed by the actual current date — not days[-1], which only lands on today
-    # when the cutoff is within the last 30 days.
-    today_cost = daily_cost_by_day.get(end_date, 0.0)
+    # "Today" is a calendar-day figure independent of the series granularity.
+    today = now.date()
+    today_cost = sum(estimated_cost(r) for r in lookback_records if r.timestamp.date() == today)
 
     return {
         "session_cost": session_cost,

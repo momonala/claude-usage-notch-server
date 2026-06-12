@@ -2,6 +2,7 @@
 
 from datetime import date
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 
 import pytest
@@ -307,8 +308,67 @@ def test_analytics_today_cost_anchored_to_current_date(client):
     body = client.get(f"/api/analytics?{params}").get_json()
 
     assert abs(body["today_cost"] - 3.0) < 0.001  # 1M sonnet input @ $3/M
+    # Default ("day") granularity: last 30 daily buckets, last one is today.
     assert len(body["daily_cost"]) == 30  # last 30 days, capped
-    assert body["daily_cost"][-1]["date"] == str(now.date())
+    assert body["daily_cost"][-1]["date"].startswith(str(now.date()))
+
+
+def test_analytics_hour_granularity_returns_24_buckets(client):
+    # 1D view: spend/sessions roll up per hour over the last 24 hours.
+    now = datetime.now(timezone.utc)
+    ts = now.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    client.post(
+        "/api/records",
+        json=[
+            _record(
+                "h1",
+                ts,
+                model="claude-sonnet-4-6",
+                input_tokens=1_000_000,
+                output_tokens=0,
+                cache_creation_tokens=0,
+                cache_read_tokens=0,
+            )
+        ],
+    )
+    params = (
+        f"session_since={ts}&weekly_since={ts}&month_since={ts}"
+        f"&lookback_since={ts}&granularity=hour"
+    )
+    body = client.get(f"/api/analytics?{params}").get_json()
+
+    assert len(body["daily_cost"]) == 24
+    assert len(body["daily_sessions"]) == 24
+    # The current hour's bucket holds the one record's spend.
+    assert abs(body["daily_cost"][-1]["value"] - 3.0) < 0.001
+    assert body["daily_sessions"][-1]["value"] == 1
+
+
+def test_analytics_month_granularity_spans_record_months(client):
+    # "All" view: spend/sessions roll up per calendar month from the first record.
+    now = datetime.now(timezone.utc)
+    two_months_ago = (now.replace(day=1) - timedelta(days=40)).strftime("%Y-%m-%dT12:00:00.000Z")
+    client.post(
+        "/api/records",
+        json=[_record("m1", two_months_ago, session_id="s-old")],
+    )
+    params = (
+        f"session_since={now:%Y-%m-%dT%H:%M:%S.000Z}"
+        f"&weekly_since={now:%Y-%m-%dT%H:%M:%S.000Z}"
+        "&month_since=1970-01-01T00:00:00.000Z"
+        "&lookback_since=1970-01-01T00:00:00.000Z"
+        "&granularity=month"
+    )
+    body = client.get(f"/api/analytics?{params}").get_json()
+
+    # Monthly buckets from the record's month through the current month: >= 3.
+    assert len(body["daily_cost"]) >= 3
+    assert all("T00:00:00" in d["date"] for d in body["daily_cost"])
+
+
+def test_analytics_rejects_invalid_granularity(client):
+    params = f"{_ANALYTICS_PARAMS}&granularity=week"
+    assert client.get(f"/api/analytics?{params}").status_code == 400
 
 
 def test_analytics_missing_params_returns_400(client):

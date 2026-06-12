@@ -98,18 +98,23 @@ Returns a JSON array ordered by `timestamp`. Omit `since` for everything.
 
 ### GET /api/analytics
 
-Aggregates records into the chart payload the app renders. All four params are
-required ISO8601 timestamps marking the start of each window:
+Aggregates records into the chart payload the app renders. The four `*_since` params are
+required ISO8601 timestamps marking the start of each window; `granularity` is optional:
 
 ```bash
-curl 'http://localhost:5014/api/analytics?session_since=2026-06-12T07:00:00Z&weekly_since=2026-06-06T00:00:00Z&month_since=2026-05-13T00:00:00Z&lookback_since=2026-05-13T00:00:00Z'
+curl 'http://localhost:5014/api/analytics?session_since=2026-06-12T07:00:00Z&weekly_since=2026-06-06T00:00:00Z&month_since=2026-05-13T00:00:00Z&lookback_since=2026-05-13T00:00:00Z&granularity=day'
 ```
 
 `session_since` / `weekly_since` / `month_since` are fixed reference windows (5h / 7d /
 30d) driving the cost pills and the session/weekly charts. `lookback_since` follows the
-app's 7D/30D/All selector and drives the period-labeled breakdowns and daily charts —
-keep it independent of the fixed windows so, e.g., switching to 7D doesn't shrink the
-"Month" figure.
+app's 1D/7D/30D/All selector and drives the period-labeled breakdowns and spend/sessions
+series — keep it independent of the fixed windows so, e.g., switching to 7D doesn't shrink
+the "Month" figure.
+
+`granularity` sets the spend/sessions bucket width: `hour` (the 1D view → 24 hourly
+buckets), `day` (7D/30D → daily buckets, the default), or `month` (All → one bucket per
+calendar month from the first record). Bucket starts in `daily_cost` / `daily_sessions`
+are ISO8601 timestamps regardless of granularity.
 
 Returns costs (`session_cost`, `weekly_cost`, `month_cost`, `lifetime_cost`, …),
 `cache_hit_rate`, token-type fractions, `model_breakdown` / `project_breakdown` /

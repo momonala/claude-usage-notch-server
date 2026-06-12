@@ -3,7 +3,7 @@
 GET  /status                                          liveness check
 POST /api/records                                     upsert a batch of records (idempotent by uuid)
 GET  /api/records?since=ISO                           records with timestamp >= since
-GET  /api/analytics?session_since=&weekly_since=&monthly_since=
+GET  /api/analytics?session_since=&weekly_since=&month_since=&lookback_since=&granularity=
                                                       pre-aggregated chart data
 """
 
@@ -105,12 +105,17 @@ def get_analytics():
         weekly_since    — start of the 7-day weekly window
         month_since     — start of the trailing 30-day window (the "Month" figure)
         lookback_since  — start of the user-selected lookback; drives the breakdowns
-                          and daily charts, independent of the fixed windows above
+                          and spend/sessions series, independent of the fixed windows above
+        granularity     — spend/sessions bucket width: "hour" (1D), "day" (7D/30D),
+                          or "month" (All). Optional; defaults to "day".
     """
     keys = ("session_since", "weekly_since", "month_since", "lookback_since")
     raw = [request.args.get(k) for k in keys]
     if not all(raw):
         return jsonify({"error": f"{', '.join(keys)} are required"}), 400
+    granularity = request.args.get("granularity", "day")
+    if granularity not in ("hour", "day", "month"):
+        return jsonify({"error": f"invalid granularity: {granularity}"}), 400
     try:
         # Strip tzinfo: SQLite/SQLAlchemy stores naive UTC datetimes.
         session_cutoff, weekly_cutoff, month_cutoff, lookback_cutoff = [
@@ -166,5 +171,6 @@ def get_analytics():
             session_cutoff,
             weekly_cutoff,
             lookback_cutoff,
+            granularity,
         )
     )
