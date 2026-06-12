@@ -2,10 +2,10 @@ import logging
 import re
 import subprocess
 from datetime import datetime
+from datetime import timezone
 
 from src.config import DB_PATH
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 BRANCH = "main"
@@ -15,11 +15,10 @@ RANGE_RE = re.compile(
     r"(?P<start>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})-" r"(?P<end>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})"
 )
 
-database_path = DB_PATH
-file_to_commit = f"{database_path}.bk"
+file_to_commit = f"{DB_PATH}.bk"
 
 
-def run_command(cmd):
+def run_command(cmd: list[str]) -> str:
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         logger.error("Command %s failed: %s", cmd, result.stderr.strip())
@@ -40,8 +39,8 @@ def parse_start_from_commit(message: str) -> str | None:
 
 
 def commit_db_if_changed():
-    run_command(["cp", database_path, file_to_commit])
-    logger.info(f"Copied {database_path} to {file_to_commit}")
+    run_command(["cp", DB_PATH, file_to_commit])
+    logger.info("Copied %s to %s", DB_PATH, file_to_commit)
 
     diff = run_command(["git", "diff", file_to_commit])
     if not diff:
@@ -49,7 +48,7 @@ def commit_db_if_changed():
         return
 
     run_command(["git", "add", file_to_commit])
-    now_str = format_datetime(datetime.now())
+    now_str = format_datetime(datetime.now(timezone.utc))
     last_commit_msg = ""
     start_time = now_str
     should_amend = False

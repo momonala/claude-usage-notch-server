@@ -42,23 +42,19 @@ def config_cli(
         typer.echo(f"flask_port={FLASK_PORT}")
         return
 
-    # (flag, value) pairs, not a dict — two False flags would collide on a single
-    # False key.
-    for is_set, value in (
-        (project_name, PROJECT_NAME),
-        (project_version, PROJECT_VERSION),
-        (flask_port, FLASK_PORT),
-    ):
-        if is_set:
-            typer.echo(value)
-            return
-
-    typer.secho(
-        "Error: No config key specified. Use --help to see available options.",
-        fg=typer.colors.RED,
-        err=True,
-    )
-    raise typer.Exit(1)
+    if project_name:
+        typer.echo(PROJECT_NAME)
+    elif project_version:
+        typer.echo(PROJECT_VERSION)
+    elif flask_port:
+        typer.echo(FLASK_PORT)
+    else:
+        typer.secho(
+            "Error: No config key specified. Use --help to see available options.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
 
 
 def main():

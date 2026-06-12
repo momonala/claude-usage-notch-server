@@ -89,6 +89,7 @@ def _add_months(start: datetime, n: int) -> datetime:
 
 def _build_series(
     records: list[UsageRecord],
+    costs: list[float],
     granularity: str,
     lookback_cutoff: datetime,
     now: datetime,
@@ -134,9 +135,9 @@ def _build_series(
 
     cost_by: dict[datetime, float] = defaultdict(float)
     sessions_by: dict[datetime, set] = defaultdict(set)
-    for r in records:
+    for r, cost in zip(records, costs):
         slot = key(r.timestamp)
-        cost_by[slot] += estimated_cost(r)
+        cost_by[slot] += cost
         if r.session_id:
             sessions_by[slot].add(r.session_id)
 
@@ -204,7 +205,6 @@ def compute_analytics(
     session_cost = sum(estimated_cost(r) for r in session_records)
     weekly_cost = sum(estimated_cost(r) for r in weekly_records)
     month_cost = sum(estimated_cost(r) for r in month_records)
-    lookback_cost = sum(estimated_cost(r) for r in lookback_records)
 
     # Token breakdowns, cache, model/project/skill mix, and web counts are all
     # labeled with the selected lookback period in the UI, so they aggregate over
@@ -234,18 +234,20 @@ def compute_analytics(
     # Rough blended $/Mtok over the lookback window (total cost spread across
     # cacheable tokens). Only used to estimate cache savings below — not a precise
     # per-token input rate, hence "blended".
-    blended_rate = (lookback_cost / max(1, cacheable_denom) * 1_000_000) if lookback_records else 3.0
+    lookback_costs = [estimated_cost(r) for r in lookback_records]
+    lookback_cost = sum(lookback_costs)
+    blended_rate = (lookback_cost / cacheable_denom * 1_000_000) if cacheable_denom > 0 else 3.0
     cache_savings = total_cache_read * blended_rate * 0.9 / 1_000_000
 
-    all_tokens = max(1, total_input + total_output + total_cache_create + total_cache_read)
+    all_tokens = total_input + total_output + total_cache_create + total_cache_read
 
     # Spend/sessions series; bucket width follows the lookback granularity
     # (hourly for 1D, daily for 7D/30D, monthly for All).
-    daily_cost, daily_sessions = _build_series(lookback_records, granularity, lookback_cutoff, now)
+    daily_cost, daily_sessions = _build_series(lookback_records, lookback_costs, granularity, lookback_cutoff, now)
 
     # "Today" is a calendar-day figure independent of the series granularity.
     today = now.date()
-    today_cost = sum(estimated_cost(r) for r in lookback_records if r.timestamp.date() == today)
+    today_cost = sum(cost for r, cost in zip(lookback_records, lookback_costs) if r.timestamp.date() == today)
 
     return {
         "session_cost": session_cost,
@@ -260,10 +262,10 @@ def compute_analytics(
             "output_tokens": total_output,
             "cache_creation_tokens": total_cache_create,
             "cache_read_tokens": total_cache_read,
-            "input_fraction": total_input / all_tokens,
-            "output_fraction": total_output / all_tokens,
-            "cache_creation_fraction": total_cache_create / all_tokens,
-            "cache_read_fraction": total_cache_read / all_tokens,
+            "input_fraction": total_input / all_tokens if all_tokens > 0 else 0.0,
+            "output_fraction": total_output / all_tokens if all_tokens > 0 else 0.0,
+            "cache_creation_fraction": total_cache_create / all_tokens if all_tokens > 0 else 0.0,
+            "cache_read_fraction": total_cache_read / all_tokens if all_tokens > 0 else 0.0,
         },
         "model_breakdown": _to_ranked(model_tokens, top=3),
         "project_breakdown": _to_ranked(project_tokens, top=5),
