@@ -38,7 +38,6 @@ the systemd service and Cloudflare route.
 ```bash
 uv sync
 uv run app          # Flask API on flask_port
-uv run scheduler    # hourly git backup of the DB (separate process)
 ```
 
 ## Architecture
@@ -48,8 +47,6 @@ ClaudeUsageNotch app ──POST /api/records──► Flask API ──► SQLite
         ▲                                       │
         ├──────────GET /api/records?since=──────┤
         └──────────GET /api/analytics──────────►┘  (aggregated in src/analytics.py)
-
-scheduler (separate process) ──hourly──► git commit of <DB_PATH>.bk
 ```
 
 The schema is a single table created on startup via SQLAlchemy `create_all` — no
@@ -63,8 +60,6 @@ migration tooling, since it's a single-user store with no reverse-compatibility 
 | `src/analytics.py` | On-demand aggregation for `/api/analytics` (cost, breakdowns, buckets) |
 | `src/database.py` | Engine, `session_scope`, `init_db` |
 | `src/config.py` | All config (read from `pyproject.toml`) + `DATABASE_URL`; CLI for install scripts |
-| `src/scheduler.py` | Periodic background tasks (currently hourly DB git backup) |
-| `src/git_tool.py` | Commits `<DB_PATH>.bk` when the DB changes |
 
 ## API
 
@@ -138,7 +133,6 @@ ephemeral_1h_tokens, ephemeral_5m_tokens, web_searches, web_fetches
 
 ## Deployment
 
-`install/install.sh` installs two systemd services on the Raspberry Pi — the Flask API
-(`projects_claude-usage-notch-server.service`) and the scheduler
-(`projects_claude-usage-notch-server_scheduler.service`) — and registers a Cloudflare
+`install/install.sh` installs a systemd service on the Raspberry Pi
+(`projects_claude-usage-notch-server.service`) and registers a Cloudflare
 tunnel route at `claude-usage-notch-server.mnalavadi.org`.

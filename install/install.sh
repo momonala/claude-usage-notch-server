@@ -27,7 +27,7 @@ echo "📋 Configuration:"
     echo -e "   ${CYAN}cloudflare_domain${NC}|${YELLOW}${service_name}.mnalavadi.org${NC}"
 } | column -t -s '|'
 
-services=("projects_${service_name}" "projects_${service_name}_scheduler")
+services=("projects_${service_name}")
 
 echo "✅ Copying service files to systemd directory"
 for service in "${services[@]}"; do
