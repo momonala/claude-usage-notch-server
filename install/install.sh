@@ -28,12 +28,16 @@ echo "📋 Configuration:"
 } | column -t -s '|'
 
 services=("projects_${service_name}")
+ping_unit="projects_${service_name}_ping"
 
 echo "✅ Copying service files to systemd directory"
 for service in "${services[@]}"; do
     sudo cp install/${service}.service /lib/systemd/system/${service}.service
     sudo chmod 644 /lib/systemd/system/${service}.service
 done
+sudo cp install/${ping_unit}.service /lib/systemd/system/${ping_unit}.service
+sudo cp install/${ping_unit}.timer   /lib/systemd/system/${ping_unit}.timer
+sudo chmod 644 /lib/systemd/system/${ping_unit}.service /lib/systemd/system/${ping_unit}.timer
 
 echo "✅ Reloading systemd daemon"
 sudo systemctl daemon-reload
@@ -45,6 +49,11 @@ for service in "${services[@]}"; do
     sudo systemctl restart ${service}.service
     sudo systemctl status ${service}.service --no-pager
 done
+
+echo "✅ Enabling daily ping timer"
+sudo systemctl enable ${ping_unit}.timer
+sudo systemctl start  ${ping_unit}.timer
+sudo systemctl status ${ping_unit}.timer --no-pager
 
 echo "✅ Adding Cloudflared service"
 /home/mnalavadi/add_cloudflared_service.sh ${service_name}.mnalavadi.org $service_port
