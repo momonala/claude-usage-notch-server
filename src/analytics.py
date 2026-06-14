@@ -87,6 +87,23 @@ def _add_months(start: datetime, n: int) -> datetime:
     return datetime(idx // 12, idx % 12 + 1, 1)
 
 
+def _build_hourly_activity(
+    records: list[UsageRecord],
+    lookback_cutoff: datetime,
+    now: datetime,
+) -> list[dict]:
+    """Average API requests per hour-of-day across the lookback period."""
+    now_naive = now.replace(tzinfo=None)
+    cutoff_naive = lookback_cutoff.replace(tzinfo=None)
+    days = max(1, (now_naive.date() - cutoff_naive.date()).days + 1)
+
+    counts_by_hour: dict[int, int] = defaultdict(int)
+    for r in records:
+        counts_by_hour[r.timestamp.hour] += 1
+
+    return [{"hour": h, "value": counts_by_hour.get(h, 0) / days} for h in range(24)]
+
+
 def _build_series(
     records: list[UsageRecord],
     costs: list[float],
@@ -274,6 +291,7 @@ def compute_analytics(
         "skill_breakdown": _to_ranked(skill_tokens, top=5),
         "daily_cost": daily_cost,
         "daily_sessions": daily_sessions,
+        "hourly_activity": _build_hourly_activity(lookback_records, lookback_cutoff, now),
         "total_web_searches": total_web_searches,
         "total_web_fetches": total_web_fetches,
         "session_buckets": _make_buckets(session_records, session_cutoff, "minute", 5 * 60),
