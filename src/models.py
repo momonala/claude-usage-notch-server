@@ -10,6 +10,7 @@ from datetime import timezone
 from typing import ClassVar
 
 from sqlalchemy import DateTime
+from sqlalchemy import Float
 from sqlalchemy import Index
 from sqlalchemy import Integer
 from sqlalchemy import String
@@ -38,6 +39,18 @@ def format_timestamp(value: datetime) -> str:
         value = value.replace(tzinfo=timezone.utc)
     utc = value.astimezone(timezone.utc)
     return utc.strftime("%Y-%m-%dT%H:%M:%S.") + f"{utc.microsecond // 1000:03d}Z"
+
+
+class UsageStats(Base):
+    """Single-row table caching lifetime_cost to avoid full table scans."""
+
+    __tablename__ = "usage_stats"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    lifetime_cost: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    last_updated: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
+    )
 
 
 class UsageRecord(Base):

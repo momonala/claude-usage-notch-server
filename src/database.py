@@ -10,11 +10,14 @@ from contextlib import contextmanager
 
 import sqlalchemy
 from sqlalchemy import create_engine
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
 
 from src.config import DATABASE_URL
 from src.models import Base
+from src.models import UsageRecord
+from src.models import UsageStats
 
 engine = create_engine(DATABASE_URL, future=True, connect_args={"check_same_thread": False})
 
@@ -31,6 +34,26 @@ SessionLocal = sessionmaker(bind=engine, expire_on_commit=False, future=True)
 def init_db() -> None:
     """Create tables if they don't exist."""
     Base.metadata.create_all(engine)
+    _ensure_usage_stats()
+
+
+def _ensure_usage_stats() -> None:
+    from src.analytics import estimated_cost_fields
+
+    with session_scope() as session:
+        if session.get(UsageStats, 1) is not None:
+            return
+        rows = session.execute(
+            select(
+                UsageRecord.model,
+                UsageRecord.input_tokens,
+                UsageRecord.cache_creation_tokens,
+                UsageRecord.output_tokens,
+                UsageRecord.cache_read_tokens,
+            )
+        ).all()
+        lifetime_cost = sum(estimated_cost_fields(*row) for row in rows)
+        session.add(UsageStats(id=1, lifetime_cost=lifetime_cost))
 
 
 @contextmanager
