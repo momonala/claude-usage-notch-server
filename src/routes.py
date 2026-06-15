@@ -9,6 +9,8 @@ GET  /api/analytics?session_since=&weekly_since=&month_since=&lookback_since=&gr
 
 import bisect
 import logging
+from datetime import datetime
+from datetime import timezone
 
 from flask import Blueprint
 from flask import jsonify
@@ -20,6 +22,7 @@ from src.analytics import compute_analytics
 from src.analytics import estimated_cost_fields
 from src.database import session_scope
 from src.models import UsageRecord
+from src.models import UsageStats
 from src.models import parse_timestamp
 
 logger = logging.getLogger(__name__)
@@ -54,8 +57,29 @@ def post_records():
 
     uuids = list(rows.keys())
     with session_scope() as session:
+        existing_uuids = {
+            row[0] for row in session.execute(select(UsageRecord.uuid).where(UsageRecord.uuid.in_(uuids)))
+        }
+        new_row_data = [data for uuid, data in rows.items() if uuid not in existing_uuids]
+
         stmt = sqlite_insert(UsageRecord).on_conflict_do_nothing(index_elements=["uuid"])
         result = session.connection().execute(stmt, list(rows.values()))
+
+        if new_row_data:
+            cost_delta = sum(
+                estimated_cost_fields(
+                    d["model"],
+                    d["input_tokens"],
+                    d["cache_creation_tokens"],
+                    d["output_tokens"],
+                    d["cache_read_tokens"],
+                )
+                for d in new_row_data
+            )
+            stats = session.get(UsageStats, 1)
+            if stats is not None:
+                stats.lifetime_cost += cost_delta
+                stats.last_updated = datetime.now(timezone.utc)
 
     # SQLite sets rowcount to actual rows inserted (skipped rows don't count).
     inserted = result.rowcount if result.rowcount >= 0 else len(uuids)
@@ -117,20 +141,8 @@ def get_analytics():
         windowed = db.scalars(
             select(UsageRecord).where(UsageRecord.timestamp >= fetch_cutoff).order_by(UsageRecord.timestamp)
         ).all()
-        # Lifetime cost is the only figure needing the full history; pull just the
-        # cost columns rather than whole ORM rows.
-        lifetime_cost = sum(
-            estimated_cost_fields(*row)
-            for row in db.execute(
-                select(
-                    UsageRecord.model,
-                    UsageRecord.input_tokens,
-                    UsageRecord.cache_creation_tokens,
-                    UsageRecord.output_tokens,
-                    UsageRecord.cache_read_tokens,
-                )
-            ).all()
-        )
+        stats = db.get(UsageStats, 1)
+        lifetime_cost = stats.lifetime_cost if stats is not None else 0.0
 
     # Records are sorted by timestamp; bisect avoids multiple O(n) linear scans.
     timestamps = [r.timestamp for r in windowed]
