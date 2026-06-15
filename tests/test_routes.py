@@ -157,7 +157,7 @@ def test_analytics_returns_expected_shape_on_empty_db(client):
 
     assert isinstance(body["session_buckets"], list)
     assert isinstance(body["weekly_buckets"], list)
-    assert len(body["session_buckets"]) == 5 * 60
+    assert len(body["session_buckets"]) == 24 * 60
     assert len(body["weekly_buckets"]) == 7 * 24
 
 
