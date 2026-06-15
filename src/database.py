@@ -8,6 +8,7 @@ about, so `create_all` is sufficient.
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+import sqlalchemy
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
@@ -15,7 +16,12 @@ from sqlalchemy.orm import sessionmaker
 from src.config import DATABASE_URL
 from src.models import Base
 
-engine = create_engine(DATABASE_URL, future=True)
+engine = create_engine(DATABASE_URL, future=True, connect_args={"check_same_thread": False})
+
+
+@sqlalchemy.event.listens_for(engine, "connect")
+def _set_wal_mode(dbapi_conn, _connection_record):
+    dbapi_conn.execute("PRAGMA journal_mode=WAL")
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False, future=True)
 
 

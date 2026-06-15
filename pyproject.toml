@@ -44,6 +44,7 @@ packages = ["."]
 [project.scripts]
 config = "src.config:main"
 app = "src.app:main"
+backfill = "backfill:main"
 
 [tool.black]
 line-length = 110
