@@ -294,6 +294,8 @@ def compute_analytics(
         "hourly_activity": _build_hourly_activity(lookback_records, lookback_cutoff, now),
         "total_web_searches": total_web_searches,
         "total_web_fetches": total_web_fetches,
-        "session_buckets": _make_buckets(session_records, session_cutoff, "minute", 5 * 60),
+        # 24h of minute buckets: the session window is 5h, but the app charts the
+        # last 24h so the window can be seen resetting several times across the span.
+        "session_buckets": _make_buckets(session_records, session_cutoff, "minute", 24 * 60),
         "weekly_buckets": _make_buckets(weekly_records, weekly_cutoff, "hour", 7 * 24),
     }
