@@ -17,6 +17,8 @@ dependencies = [
     "isort>=8.0.1",
     "python-dotenv>=1.2.2",
     "tqdm>=4.68.2",
+    "requests>=2.32",
+    "orjson>=3.10",
 ]
 
 [project.optional-dependencies]

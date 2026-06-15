@@ -20,8 +20,11 @@ engine = create_engine(DATABASE_URL, future=True, connect_args={"check_same_thre
 
 
 @sqlalchemy.event.listens_for(engine, "connect")
-def _set_wal_mode(dbapi_conn, _connection_record):
+def _set_pragmas(dbapi_conn, _connection_record):
     dbapi_conn.execute("PRAGMA journal_mode=WAL")
+    dbapi_conn.execute("PRAGMA synchronous=NORMAL")
+
+
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False, future=True)
 
 
