@@ -16,6 +16,7 @@ dependencies = [
     "ruff>=0.15.7",
     "isort>=8.0.1",
     "python-dotenv>=1.2.2",
+    "tqdm>=4.68.2",
 ]
 
 [project.optional-dependencies]

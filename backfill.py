@@ -20,6 +20,7 @@ from pathlib import Path
 
 import typer
 from dotenv import load_dotenv
+from tqdm import tqdm
 
 load_dotenv()
 
@@ -81,7 +82,7 @@ def parse_assistant_line(raw: str) -> dict | None:
 
 def load_all_records(claude_dir: Path) -> list[dict]:
     files = find_jsonl_files(claude_dir)
-    print(f"Found {len(files)} JSONL files under {claude_dir}")
+    typer.secho(f"Found {len(files)} JSONL files under {claude_dir}", fg=typer.colors.CYAN)
 
     seen: set[str] = set()
     records: list[dict] = []
@@ -90,7 +91,7 @@ def load_all_records(claude_dir: Path) -> list[dict]:
         try:
             text = f.read_text(encoding="utf-8")
         except OSError as e:
-            print(f"  skip {f}: {e}")
+            typer.secho(f"  skip {f}: {e}", fg=typer.colors.YELLOW)
             continue
 
         for line in text.splitlines():
@@ -138,31 +139,37 @@ def backfill_cli(
             raise typer.Exit(1)
         server = prod_url
 
+    typer.secho(f"Target server: {server}", fg=typer.colors.MAGENTA, bold=True)
+
     claude_dir = Path.home() / ".claude" / "projects"
     if not claude_dir.exists():
         typer.secho(f"Error: {claude_dir} not found", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
 
     records = load_all_records(claude_dir)
-    typer.echo(f"Parsed {len(records)} unique assistant records")
+    typer.secho(f"Parsed {len(records)} unique assistant records", fg=typer.colors.CYAN, bold=True)
 
     if not records:
-        typer.echo("Nothing to backfill.")
+        typer.secho("Nothing to backfill.", fg=typer.colors.YELLOW)
         return
 
     total_inserted = total_skipped = 0
     batch_count = math.ceil(len(records) / batch_size)
 
-    for i in range(0, len(records), batch_size):
-        batch = records[i : i + batch_size]
-        batch_num = i // batch_size + 1
-        inserted, skipped = post_batch(server, batch)
-        total_inserted += inserted
-        total_skipped += skipped
-        color = typer.colors.GREEN if inserted >= 1 else typer.colors.YELLOW
-        typer.secho(f"  Batch {batch_num}/{batch_count}: inserted={inserted} skipped={skipped}", fg=color)
+    with tqdm(total=batch_count, desc="Posting batches", unit="batch") as bar:
+        for i in range(0, len(records), batch_size):
+            batch = records[i : i + batch_size]
+            inserted, skipped = post_batch(server, batch)
+            total_inserted += inserted
+            total_skipped += skipped
+            bar.set_postfix(inserted=total_inserted, skipped=total_skipped)
+            bar.update(1)
 
-    typer.echo(f"\nDone. Total inserted={total_inserted} skipped={total_skipped}")
+    typer.secho(
+        f"\nDone. Total inserted={total_inserted} skipped={total_skipped}",
+        fg=typer.colors.GREEN,
+        bold=True,
+    )
 
 
 def main() -> None:
