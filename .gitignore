@@ -82,6 +82,9 @@ secrets/
 
 # Project-specific generated files
 *.db
+*.db-shm
+*.db-wal
+*.db.bk
 prototyping/
 cache/
 event_cache.json
