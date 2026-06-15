@@ -9,7 +9,6 @@ GET  /api/analytics?session_since=&weekly_since=&month_since=&lookback_since=&gr
 
 import bisect
 import logging
-from collections.abc import Iterator
 
 from flask import Blueprint
 from flask import jsonify
@@ -26,14 +25,6 @@ from src.models import parse_timestamp
 logger = logging.getLogger(__name__)
 
 bp = Blueprint("api", __name__)
-
-# Keep `IN (...)` lookups under SQLite's bound-variable ceiling on big first syncs.
-_LOOKUP_CHUNK = 500
-
-
-def _chunked(seq: list[str], size: int) -> Iterator[list[str]]:
-    for start in range(0, len(seq), size):
-        yield seq[start : start + size]
 
 
 @bp.get("/status")
@@ -63,25 +54,12 @@ def post_records():
 
     uuids = list(rows.keys())
     with session_scope() as session:
-        # `existing` is the subset of this batch already stored, so it is exactly
-        # the rows the upsert will skip. Chunk the lookup to stay under SQLite's
-        # bound-variable limit on large first syncs.
-        existing = set()
-        for chunk in _chunked(uuids, _LOOKUP_CHUNK):
-            existing.update(
-                session.scalars(select(UsageRecord.uuid).where(UsageRecord.uuid.in_(chunk))).all()
-            )
-
-        # executemany form (params as a list) — one statement run per row, so the
-        # whole batch never becomes a single oversized INSERT.
         stmt = sqlite_insert(UsageRecord).on_conflict_do_nothing(index_elements=["uuid"])
-        session.execute(stmt, list(rows.values()))
+        result = session.connection().execute(stmt, list(rows.values()))
 
-    # Best-effort counts: with ON CONFLICT DO NOTHING, the pre-existing rows are
-    # exactly the skipped ones and the rest insert, so this is derived rather than
-    # read back from the statement's rowcount.
-    skipped = len(existing)
-    inserted = len(uuids) - skipped
+    # SQLite sets rowcount to actual rows inserted (skipped rows don't count).
+    inserted = result.rowcount if result.rowcount >= 0 else len(uuids)
+    skipped = len(uuids) - inserted
     logger.info("POST /api/records: inserted=%d skipped=%d", inserted, skipped)
     return jsonify({"inserted": inserted, "skipped": skipped})
 

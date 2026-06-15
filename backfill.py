@@ -13,11 +13,13 @@ Reads PROD_URL from a .env file in the same directory as this script (optional).
 """
 
 import json
-import math
 import os
-import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import as_completed
 from pathlib import Path
 
+import orjson
+import requests
 import typer
 from dotenv import load_dotenv
 from tqdm import tqdm
@@ -106,30 +108,25 @@ def load_all_records(claude_dir: Path) -> list[dict]:
     return records
 
 
+_WORKERS = 4
+_LOCAL_URL = "http://localhost:5014"
+_JSON_HEADERS = {"Content-Type": "application/json"}
+
+
 def post_batch(server: str, batch: list[dict]) -> tuple[int, int]:
     url = f"{server.rstrip('/')}/api/records"
-    body = json.dumps(batch).encode()
-    req = urllib.request.Request(
-        url,
-        data=body,
-        headers={
-            "Content-Type": "application/json",
-            "User-Agent": "curl/8.7.1",
-            "Accept": "*/*",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        result = json.loads(resp.read())
+    with requests.Session() as http:
+        resp = http.post(url, data=orjson.dumps(batch), headers=_JSON_HEADERS, timeout=30)
+    resp.raise_for_status()
+    result = resp.json()
     return result.get("inserted", 0), result.get("skipped", 0)
-
-
-_LOCAL_URL = "http://localhost:5014"
 
 
 def backfill_cli(
     server: str = typer.Option(_LOCAL_URL, help="Sync server base URL"),
     prod: bool = typer.Option(False, "--prod", help="Target production server (PROD_URL from .env)"),
-    batch_size: int = typer.Option(200, help="Records per POST"),
+    batch_size: int = typer.Option(1000, help="Records per POST"),
+    workers: int = typer.Option(_WORKERS, help="Concurrent POST threads"),
 ) -> None:
     """Backfill usage DB from local JSONL files."""
     if prod:
@@ -153,13 +150,16 @@ def backfill_cli(
         typer.secho("Nothing to backfill.", fg=typer.colors.YELLOW)
         return
 
+    batches = [records[i : i + batch_size] for i in range(0, len(records), batch_size)]
     total_inserted = total_skipped = 0
-    batch_count = math.ceil(len(records) / batch_size)
 
-    with tqdm(total=batch_count, desc="Posting batches", unit="batch") as bar:
-        for i in range(0, len(records), batch_size):
-            batch = records[i : i + batch_size]
-            inserted, skipped = post_batch(server, batch)
+    with (
+        ThreadPoolExecutor(max_workers=workers) as pool,
+        tqdm(total=len(batches), desc="Posting batches", unit="batch") as bar,
+    ):
+        futures = {pool.submit(post_batch, server, batch): batch for batch in batches}
+        for future in as_completed(futures):
+            inserted, skipped = future.result()
             total_inserted += inserted
             total_skipped += skipped
             bar.set_postfix(inserted=total_inserted, skipped=total_skipped)
