@@ -188,6 +188,7 @@ def test_quota_get_rejects_invalid_since(client):
 
 _ANALYTICS_PARAMS = (
     "session_since=2026-06-11T07:00:00.000Z"
+    "&session_cost_since=2026-06-11T07:00:00.000Z"
     "&weekly_since=2026-06-05T00:00:00.000Z"
     "&month_since=2026-05-13T00:00:00.000Z"
     "&lookback_since=2026-05-13T00:00:00.000Z"
@@ -288,6 +289,47 @@ def test_analytics_aggregates_costs_correctly(client):
     assert abs(body["lifetime_cost"] - sonnet_input_rate * 2) < 0.001
 
 
+def test_analytics_session_cost_uses_narrower_cutoff_than_session_buckets(client):
+    # Regression: "Session" cost must reflect only the actual current 5h session
+    # (session_cost_since), not the wide 24h range fetched for session_buckets
+    # (session_since) — otherwise Session can exceed Today.
+    client.post(
+        "/api/records",
+        json=[
+            _record(
+                "in-actual-session",
+                "2026-06-11T10:00:00.000Z",  # inside both windows
+                model="claude-sonnet-4-6",
+                input_tokens=1_000_000,
+                output_tokens=0,
+                cache_creation_tokens=0,
+                cache_read_tokens=0,
+            ),
+            _record(
+                "outside-actual-session",
+                "2026-06-11T02:00:00.000Z",  # inside the 24h session_buckets range, but
+                model="claude-sonnet-4-6",  # before the real 5h session started
+                input_tokens=1_000_000,
+                output_tokens=0,
+                cache_creation_tokens=0,
+                cache_read_tokens=0,
+            ),
+        ],
+    )
+    params = (
+        "session_since=2026-06-10T08:00:00.000Z"  # 24h back — covers both records
+        "&session_cost_since=2026-06-11T09:00:00.000Z"  # actual session start — covers only the first
+        "&weekly_since=2026-06-05T00:00:00.000Z"
+        "&month_since=2026-05-13T00:00:00.000Z"
+        "&lookback_since=2026-05-13T00:00:00.000Z"
+    )
+    body = client.get(f"/api/analytics?{params}").get_json()
+
+    sonnet_input_rate = 3.0  # $3 / 1M tokens
+    assert abs(body["session_cost"] - sonnet_input_rate) < 0.001  # only the in-session record
+    assert len(body["session_buckets"]) == 24 * 60  # buckets still span the full 24h
+
+
 def test_analytics_breakdowns_span_monthly_window(client):
     # Token/model/project/skill breakdowns are labeled with the lookback period
     # in the UI, so they must aggregate over the monthly window — not a fixed
@@ -351,6 +393,7 @@ def test_analytics_month_cost_independent_of_lookback(client):
     )
     base = (
         "session_since=2026-06-11T07:00:00.000Z"
+        "&session_cost_since=2026-06-11T07:00:00.000Z"
         "&weekly_since=2026-06-05T00:00:00.000Z"
         "&month_since=2026-05-13T00:00:00.000Z"
     )
@@ -391,6 +434,7 @@ def test_analytics_today_cost_anchored_to_current_date(client):
 
     params = (
         f"session_since={ts}"
+        f"&session_cost_since={ts}"
         f"&weekly_since={ts}"
         "&month_since=1970-01-01T00:00:00.000Z"
         "&lookback_since=1970-01-01T00:00:00.000Z"
@@ -421,7 +465,10 @@ def test_analytics_hour_granularity_returns_24_buckets(client):
             )
         ],
     )
-    params = f"session_since={ts}&weekly_since={ts}&month_since={ts}" f"&lookback_since={ts}&granularity=hour"
+    params = (
+        f"session_since={ts}&session_cost_since={ts}&weekly_since={ts}&month_since={ts}"
+        f"&lookback_since={ts}&granularity=hour"
+    )
     body = client.get(f"/api/analytics?{params}").get_json()
 
     assert len(body["daily_cost"]) == 24
@@ -441,6 +488,7 @@ def test_analytics_month_granularity_spans_record_months(client):
     )
     params = (
         f"session_since={now:%Y-%m-%dT%H:%M:%S.000Z}"
+        f"&session_cost_since={now:%Y-%m-%dT%H:%M:%S.000Z}"
         f"&weekly_since={now:%Y-%m-%dT%H:%M:%S.000Z}"
         "&month_since=1970-01-01T00:00:00.000Z"
         "&lookback_since=1970-01-01T00:00:00.000Z"
@@ -466,6 +514,7 @@ def test_analytics_missing_params_returns_400(client):
 def test_analytics_rejects_invalid_timestamp(client):
     bad = (
         "session_since=not-a-timestamp"
+        "&session_cost_since=2026-06-11T07:00:00.000Z"
         "&weekly_since=2026-06-05T00:00:00.000Z"
         "&month_since=2026-05-13T00:00:00.000Z"
         "&lookback_since=2026-05-13T00:00:00.000Z"

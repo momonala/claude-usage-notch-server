@@ -6,7 +6,7 @@ GET  /api/records?since=ISO                           records with timestamp >= 
 POST /api/quota_snapshots                             upsert a batch of polled quota readings
                                                       (idempotent by window_type+timestamp)
 GET  /api/quota_snapshots?window_type=&since=ISO       quota readings with timestamp >= since
-GET  /api/analytics?session_since=&weekly_since=&month_since=&lookback_since=&granularity=
+GET  /api/analytics?session_since=&session_cost_since=&weekly_since=&month_since=&lookback_since=&granularity=
                                                       pre-aggregated chart data
 """
 
@@ -174,15 +174,19 @@ def get_analytics():
     """Return pre-aggregated chart data covering session, weekly, month, and lookback windows.
 
     Query params (all ISO8601):
-        session_since   — start of the 5-hour session window
-        weekly_since    — start of the 7-day weekly window
-        month_since     — start of the trailing 30-day window (the "Month" figure)
-        lookback_since  — start of the user-selected lookback; drives the breakdowns
-                          and spend/sessions series, independent of the fixed windows above
-        granularity     — spend/sessions bucket width: "hour" (1D), "day" (7D/30D),
-                          or "month" (All). Optional; defaults to "day".
+        session_since      — start of the wide 24h fetch range backing the session_buckets
+                              chart (so the 5h rolling window can be seen resetting
+                              several times across the span); not the "Session" cost figure
+        session_cost_since — start of the *actual* current 5-hour session; drives the
+                              "Session" cost figure exclusively
+        weekly_since        — start of the 7-day weekly window
+        month_since         — start of the trailing 30-day window (the "Month" figure)
+        lookback_since      — start of the user-selected lookback; drives the breakdowns
+                              and spend/sessions series, independent of the fixed windows above
+        granularity         — spend/sessions bucket width: "hour" (1D), "day" (7D/30D),
+                              or "month" (All). Optional; defaults to "day".
     """
-    keys = ("session_since", "weekly_since", "month_since", "lookback_since")
+    keys = ("session_since", "session_cost_since", "weekly_since", "month_since", "lookback_since")
     raw = [request.args.get(k) for k in keys]
     missing = [k for k, v in zip(keys, raw) if not v]
     if missing:
@@ -192,7 +196,7 @@ def get_analytics():
         return jsonify({"error": f"invalid granularity: {granularity}"}), 400
     try:
         # Strip tzinfo: SQLite/SQLAlchemy stores naive UTC datetimes.
-        session_cutoff, weekly_cutoff, month_cutoff, lookback_cutoff = [
+        session_cutoff, session_cost_cutoff, weekly_cutoff, month_cutoff, lookback_cutoff = [
             parse_timestamp(v).replace(tzinfo=None) for v in raw
         ]
     except ValueError as exc:
@@ -229,10 +233,12 @@ def get_analytics():
     month_records = windowed[bisect.bisect_left(timestamps, month_cutoff) :]
     weekly_records = windowed[bisect.bisect_left(timestamps, weekly_cutoff) :]
     session_records = windowed[bisect.bisect_left(timestamps, session_cutoff) :]
+    session_cost_records = windowed[bisect.bisect_left(timestamps, session_cost_cutoff) :]
 
     logger.info(
-        "GET /api/analytics: session=%d weekly=%d month=%d lookback=%d records",
+        "GET /api/analytics: session=%d session_cost=%d weekly=%d month=%d lookback=%d records",
         len(session_records),
+        len(session_cost_records),
         len(weekly_records),
         len(month_records),
         len(lookback_records),
@@ -248,6 +254,7 @@ def get_analytics():
             weekly_cutoff,
             lookback_cutoff,
             granularity,
+            session_cost_records,
             session_quota_records,
             weekly_quota_records,
         )
