@@ -220,14 +220,18 @@ def compute_analytics(
     weekly_cutoff: datetime,
     lookback_cutoff: datetime,
     granularity: str,
+    session_cost_records: list[UsageRecord],
     session_quota_records: list[QuotaSnapshot] | None = None,
     weekly_quota_records: list[QuotaSnapshot] | None = None,
 ) -> dict:
     now = datetime.now(timezone.utc)
 
-    # session/weekly/month are fixed reference windows; lookback follows the
-    # user's period selector and drives the breakdowns + daily charts below.
-    session_cost = sum(estimated_cost(r) for r in session_records)
+    # `session_records` spans a wide 24h window so the session_buckets chart can
+    # show the 5h rolling window resetting multiple times. The "Session" cost
+    # figure must instead reflect only the *current* session — narrower and
+    # passed separately as `session_cost_records` — otherwise it double-counts
+    # spend from outside the actual rolling window (and can exceed "Today").
+    session_cost = sum(estimated_cost(r) for r in session_cost_records)
     weekly_cost = sum(estimated_cost(r) for r in weekly_records)
     month_cost = sum(estimated_cost(r) for r in month_records)
 
