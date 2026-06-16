@@ -53,6 +53,50 @@ class UsageStats(Base):
     )
 
 
+class QuotaSnapshot(Base):
+    """One polled reading of a provider's quota utilization (e.g. Claude's 5h/7d windows).
+
+    Real ground truth for the chart's "% Quota" view, recorded straight from the
+    notch app's poll of the provider's usage endpoint — unlike usage_records, there
+    is no historical source to backfill this from (Claude's local JSONL doesn't
+    carry quota percentages), so history only starts once a client begins pushing.
+
+    Composite-keyed by (window_type, timestamp) rather than a surrogate id so
+    repeated POSTs (retry, or several laptops polling the same account moments
+    apart) are idempotent, mirroring usage_records' uuid dedup.
+    """
+
+    __tablename__ = "quota_snapshots"
+
+    window_type: Mapped[str] = mapped_column(String, primary_key=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, primary_key=True)
+    percent_used: Mapped[float] = mapped_column(Float, nullable=False)
+    resets_at: Mapped[datetime | None] = mapped_column(DateTime)
+    source: Mapped[str | None] = mapped_column(String)  # device hostname; multi-laptop debugging only
+    ingested_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+
+    __table_args__ = (Index("idx_quota_snapshots_timestamp", "timestamp"),)
+
+    _CLIENT_FIELDS: ClassVar[tuple[str, ...]] = ("window_type", "percent_used", "resets_at", "source")
+
+    @classmethod
+    def row_from_json(cls, data: dict) -> dict:
+        row = {field: data.get(field) for field in cls._CLIENT_FIELDS}
+        row["timestamp"] = parse_timestamp(data["timestamp"])
+        if row.get("resets_at"):
+            row["resets_at"] = parse_timestamp(row["resets_at"])
+        return row
+
+    def to_json(self) -> dict:
+        result = {field: getattr(self, field) for field in self._CLIENT_FIELDS}
+        result["timestamp"] = format_timestamp(self.timestamp)
+        if self.resets_at:
+            result["resets_at"] = format_timestamp(self.resets_at)
+        return result
+
+
 class UsageRecord(Base):
     __tablename__ = "usage_records"
 

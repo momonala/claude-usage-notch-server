@@ -3,6 +3,11 @@
 Parses JSONL the same way LocalHistoryReader.swift does, then POSTs records to
 the server in batches. Idempotent — the server dedupes by uuid.
 
+Covers `usage_records` (token counts) only. There is no local source for
+`quota_snapshots` (polled session/weekly quota %) — Claude's JSONL history doesn't
+carry it, so that table only has data from whenever a client started polling and
+pushing it; it can't be backfilled retroactively.
+
 Usage:
     uv run python backfill.py
     uv run python backfill.py --prod

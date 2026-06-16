@@ -11,6 +11,7 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 
+from src.models import QuotaSnapshot
 from src.models import UsageRecord
 from src.models import format_timestamp
 
@@ -204,6 +205,11 @@ def _make_buckets(
 # ---------------------------------------------------------------------------
 
 
+def _quota_history(records: list[QuotaSnapshot]) -> list[dict]:
+    """Real polled quota readings as [{timestamp, percent_used}], oldest first."""
+    return [{"timestamp": format_timestamp(q.timestamp), "percent_used": q.percent_used} for q in records]
+
+
 def compute_analytics(
     session_records: list[UsageRecord],
     weekly_records: list[UsageRecord],
@@ -214,6 +220,8 @@ def compute_analytics(
     weekly_cutoff: datetime,
     lookback_cutoff: datetime,
     granularity: str,
+    session_quota_records: list[QuotaSnapshot] | None = None,
+    weekly_quota_records: list[QuotaSnapshot] | None = None,
 ) -> dict:
     now = datetime.now(timezone.utc)
 
@@ -291,6 +299,8 @@ def compute_analytics(
         "skill_breakdown": _to_ranked(skill_tokens, top=5),
         "daily_cost": daily_cost,
         "daily_sessions": daily_sessions,
+        "session_quota_history": _quota_history(session_quota_records or []),
+        "weekly_quota_history": _quota_history(weekly_quota_records or []),
         "hourly_activity": _build_hourly_activity(lookback_records, lookback_cutoff, now),
         "total_web_searches": total_web_searches,
         "total_web_fetches": total_web_fetches,

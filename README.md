@@ -68,6 +68,8 @@ migration tooling, since it's a single-user store with no reverse-compatibility 
 | `/status` | GET | Health check → `{"status": "ok"}` |
 | `/api/records` | POST | Upsert a batch (idempotent by `uuid`) |
 | `/api/records` | GET | Records with `timestamp >= since` |
+| `/api/quota_snapshots` | POST | Upsert a batch of polled quota readings (idempotent by `window_type`+`timestamp`) |
+| `/api/quota_snapshots` | GET | Readings with `timestamp >= since`, optionally filtered by `window_type` |
 | `/api/analytics` | GET | Pre-aggregated chart data for the session/weekly/month + lookback windows |
 
 ### POST /api/records
@@ -91,6 +93,29 @@ curl 'http://localhost:5014/api/records?since=2026-06-01T00:00:00Z'
 
 Returns a JSON array ordered by `timestamp`. Omit `since` for everything.
 
+### POST /api/quota_snapshots
+
+Body is a JSON **array** of polled quota readings — one per window the client just
+fetched from the provider (e.g. Claude's `five_hour` and `seven_day`). Upsert is
+`INSERT … ON CONFLICT(window_type, timestamp) DO NOTHING`, so re-posting (or two
+devices polling the same account a moment apart) is safe.
+
+```bash
+curl -X POST http://localhost:5014/api/quota_snapshots \
+  -H 'Content-Type: application/json' \
+  -d '[{"window_type":"session","timestamp":"2026-06-16T12:34:00.000Z","percent_used":0.42,"resets_at":"2026-06-16T17:00:00.000Z","source":"MacBook-Pro"}]'
+```
+
+Response: `{"inserted": N, "skipped": M}`.
+
+### GET /api/quota_snapshots
+
+```bash
+curl 'http://localhost:5014/api/quota_snapshots?window_type=session&since=2026-06-01T00:00:00Z'
+```
+
+Returns a JSON array ordered by `timestamp`. `window_type` and `since` are both optional.
+
 ### GET /api/analytics
 
 Aggregates records into the chart payload the app renders. The four `*_since` params are
@@ -113,9 +138,14 @@ are ISO8601 timestamps regardless of granularity.
 
 Returns costs (`session_cost`, `weekly_cost`, `month_cost`, `lifetime_cost`, …),
 `cache_hit_rate`, token-type fractions, `model_breakdown` / `project_breakdown` /
-`skill_breakdown`, `daily_cost` / `daily_sessions`, and per-minute `session_buckets` +
-per-hour `weekly_buckets`. The DB fetch floor is `min(lookback_since, month_since)`;
-only `lifetime_cost` scans the full history (cost columns only). See `src/analytics.py`.
+`skill_breakdown`, `daily_cost` / `daily_sessions`, per-minute `session_buckets` +
+per-hour `weekly_buckets` (token counts), and `session_quota_history` /
+`weekly_quota_history` — the real polled `quota_snapshots` readings covering the same
+spans as `session_buckets` / `weekly_buckets`, oldest first. The latter two are empty
+until a client has pushed at least one reading for that window; the app falls back to
+a token-based estimate when empty (see `UsageChartView.swift`). The DB fetch floor is
+`min(lookback_since, month_since)`; only `lifetime_cost` scans the full history (cost
+columns only). See `src/analytics.py`.
 
 ### Record schema
 
@@ -130,6 +160,16 @@ ephemeral_1h_tokens, ephemeral_5m_tokens, web_searches, web_fetches
 ```
 
 `ingested_at` is server-owned and not part of the API.
+
+### Quota snapshot schema
+
+`window_type` + `timestamp` form the composite primary key. `percent_used` is
+required (0...1+); `resets_at` and `source` (the polling device's hostname) are
+optional. `ingested_at` is server-owned.
+
+```
+window_type, timestamp, percent_used, resets_at, source
+```
 
 ## Deployment
 

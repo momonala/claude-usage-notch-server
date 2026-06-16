@@ -111,6 +111,78 @@ def test_post_large_batch_stays_under_variable_limit(client):
 
 
 # ---------------------------------------------------------------------------
+# Quota snapshots endpoint
+# ---------------------------------------------------------------------------
+
+
+def _quota(window_type: str, timestamp: str, **overrides) -> dict:
+    base = {
+        "window_type": window_type,
+        "timestamp": timestamp,
+        "percent_used": 0.42,
+        "resets_at": "2026-06-16T17:00:00.000Z",
+        "source": "test-laptop",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_quota_post_inserts_and_get_returns(client):
+    snapshots = [
+        _quota("session", "2026-06-16T12:00:00.000Z"),
+        _quota("weekly", "2026-06-16T12:00:00.000Z", percent_used=0.1),
+    ]
+    resp = client.post("/api/quota_snapshots", json=snapshots)
+    assert resp.status_code == 200
+    assert resp.get_json() == {"inserted": 2, "skipped": 0}
+
+    body = client.get("/api/quota_snapshots").get_json()
+    assert len(body) == 2
+    assert {r["window_type"] for r in body} == {"session", "weekly"}
+    session_row = next(r for r in body if r["window_type"] == "session")
+    assert session_row["percent_used"] == 0.42
+    assert session_row["timestamp"] == "2026-06-16T12:00:00.000Z"
+    assert session_row["resets_at"] == "2026-06-16T17:00:00.000Z"
+    assert session_row["source"] == "test-laptop"
+
+
+def test_quota_post_is_idempotent_by_window_type_and_timestamp(client):
+    snap = _quota("session", "2026-06-16T12:00:00.000Z")
+    assert client.post("/api/quota_snapshots", json=[snap]).get_json() == {"inserted": 1, "skipped": 0}
+    # Re-posting the same (window_type, timestamp) is a no-op — covers retries and
+    # multiple laptops polling the same account a moment apart.
+    assert client.post("/api/quota_snapshots", json=[snap]).get_json() == {"inserted": 0, "skipped": 1}
+    assert len(client.get("/api/quota_snapshots").get_json()) == 1
+
+
+def test_quota_get_filters_by_window_type_and_since(client):
+    client.post(
+        "/api/quota_snapshots",
+        json=[
+            _quota("session", "2026-06-16T12:00:00.000Z"),
+            _quota("weekly", "2026-06-16T12:00:00.000Z"),
+            _quota("session", "2026-06-10T00:00:00.000Z"),
+        ],
+    )
+    body = client.get("/api/quota_snapshots?window_type=session&since=2026-06-15T00:00:00Z").get_json()
+    assert len(body) == 1
+    assert body[0]["timestamp"] == "2026-06-16T12:00:00.000Z"
+
+
+def test_quota_post_rejects_non_array(client):
+    assert client.post("/api/quota_snapshots", json={"window_type": "session"}).status_code == 400
+
+
+def test_quota_post_skips_missing_fields(client):
+    resp = client.post("/api/quota_snapshots", json=[{"window_type": "session"}])
+    assert resp.get_json() == {"inserted": 0, "skipped": 0}
+
+
+def test_quota_get_rejects_invalid_since(client):
+    assert client.get("/api/quota_snapshots?since=not-a-timestamp").status_code == 400
+
+
+# ---------------------------------------------------------------------------
 # Analytics endpoint
 # ---------------------------------------------------------------------------
 
@@ -159,6 +231,24 @@ def test_analytics_returns_expected_shape_on_empty_db(client):
     assert isinstance(body["weekly_buckets"], list)
     assert len(body["session_buckets"]) == 24 * 60
     assert len(body["weekly_buckets"]) == 7 * 24
+    # No client has pushed a quota reading yet — empty, not absent.
+    assert body["session_quota_history"] == []
+    assert body["weekly_quota_history"] == []
+
+
+def test_analytics_includes_real_quota_history_within_window(client):
+    client.post(
+        "/api/quota_snapshots",
+        json=[
+            _quota("session", "2026-06-11T08:00:00.000Z", percent_used=0.5),  # inside session window
+            _quota("session", "2026-06-01T00:00:00.000Z", percent_used=0.9),  # outside session window
+            _quota("weekly", "2026-06-06T00:00:00.000Z", percent_used=0.3),  # inside weekly window
+        ],
+    )
+    body = client.get(f"/api/analytics?{_ANALYTICS_PARAMS}").get_json()
+
+    assert body["session_quota_history"] == [{"timestamp": "2026-06-11T08:00:00.000Z", "percent_used": 0.5}]
+    assert body["weekly_quota_history"] == [{"timestamp": "2026-06-06T00:00:00.000Z", "percent_used": 0.3}]
 
 
 def test_analytics_aggregates_costs_correctly(client):

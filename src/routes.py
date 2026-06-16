@@ -3,6 +3,9 @@
 GET  /status                                          liveness check
 POST /api/records                                     upsert a batch of records (idempotent by uuid)
 GET  /api/records?since=ISO                           records with timestamp >= since
+POST /api/quota_snapshots                             upsert a batch of polled quota readings
+                                                      (idempotent by window_type+timestamp)
+GET  /api/quota_snapshots?window_type=&since=ISO       quota readings with timestamp >= since
 GET  /api/analytics?session_since=&weekly_since=&month_since=&lookback_since=&granularity=
                                                       pre-aggregated chart data
 """
@@ -21,6 +24,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from src.analytics import compute_analytics
 from src.analytics import estimated_cost_fields
 from src.database import session_scope
+from src.models import QuotaSnapshot
 from src.models import UsageRecord
 from src.models import UsageStats
 from src.models import parse_timestamp
@@ -104,6 +108,67 @@ def get_records():
         return jsonify([r.to_json() for r in records])
 
 
+@bp.post("/api/quota_snapshots")
+def post_quota_snapshots():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, list):
+        logger.warning("POST /api/quota_snapshots: rejected non-array body (type=%s)", type(payload).__name__)
+        return jsonify({"error": "expected a JSON array of records"}), 400
+
+    # Keyed by (window_type, timestamp) — the table's natural composite key — so a
+    # repeated POST (retry, or another laptop polling the same account a moment
+    # apart) is a no-op rather than a duplicate row.
+    rows: dict[tuple[str, datetime], dict] = {}
+    for item in payload:
+        if not isinstance(item, dict) or not item.get("window_type") or not item.get("timestamp"):
+            logger.warning("POST /api/quota_snapshots: skipping record missing window_type/timestamp")
+            continue
+        try:
+            data = QuotaSnapshot.row_from_json(item)
+        except ValueError:
+            logger.warning("POST /api/quota_snapshots: skipping record with invalid timestamp")
+            continue
+        rows[(data["window_type"], data["timestamp"])] = data
+
+    if not rows:
+        return jsonify({"inserted": 0, "skipped": 0})
+
+    with session_scope() as session:
+        stmt = sqlite_insert(QuotaSnapshot).on_conflict_do_nothing(
+            index_elements=["window_type", "timestamp"]
+        )
+        result = session.connection().execute(stmt, list(rows.values()))
+
+    inserted = result.rowcount if result.rowcount >= 0 else len(rows)
+    skipped = len(rows) - inserted
+    logger.info("POST /api/quota_snapshots: inserted=%d skipped=%d", inserted, skipped)
+    return jsonify({"inserted": inserted, "skipped": skipped})
+
+
+@bp.get("/api/quota_snapshots")
+def get_quota_snapshots():
+    since_raw = request.args.get("since")
+    window_type = request.args.get("window_type")
+    stmt = select(QuotaSnapshot).order_by(QuotaSnapshot.timestamp)
+    if window_type:
+        stmt = stmt.where(QuotaSnapshot.window_type == window_type)
+    if since_raw:
+        try:
+            stmt = stmt.where(QuotaSnapshot.timestamp >= parse_timestamp(since_raw))
+        except ValueError:
+            return jsonify({"error": f"invalid 'since' timestamp: {since_raw}"}), 400
+
+    with session_scope() as session:
+        records = session.scalars(stmt).all()
+        logger.info(
+            "GET /api/quota_snapshots: window_type=%s since=%s returned=%d",
+            window_type,
+            since_raw,
+            len(records),
+        )
+        return jsonify([r.to_json() for r in records])
+
+
 @bp.get("/api/analytics")
 def get_analytics():
     """Return pre-aggregated chart data covering session, weekly, month, and lookback windows.
@@ -144,6 +209,20 @@ def get_analytics():
         stats = db.get(UsageStats, 1)
         lifetime_cost = stats.lifetime_cost if stats is not None else 0.0
 
+        # Real polled quota readings (ground truth) for the same spans as the
+        # session/weekly token buckets below. Empty until a client has pushed at
+        # least one reading — the app falls back to its token-based estimate then.
+        session_quota_records = db.scalars(
+            select(QuotaSnapshot)
+            .where(QuotaSnapshot.window_type == "session", QuotaSnapshot.timestamp >= session_cutoff)
+            .order_by(QuotaSnapshot.timestamp)
+        ).all()
+        weekly_quota_records = db.scalars(
+            select(QuotaSnapshot)
+            .where(QuotaSnapshot.window_type == "weekly", QuotaSnapshot.timestamp >= weekly_cutoff)
+            .order_by(QuotaSnapshot.timestamp)
+        ).all()
+
     # Records are sorted by timestamp; bisect avoids multiple O(n) linear scans.
     timestamps = [r.timestamp for r in windowed]
     lookback_records = windowed[bisect.bisect_left(timestamps, lookback_cutoff) :]
@@ -169,5 +248,7 @@ def get_analytics():
             weekly_cutoff,
             lookback_cutoff,
             granularity,
+            session_quota_records,
+            weekly_quota_records,
         )
     )
