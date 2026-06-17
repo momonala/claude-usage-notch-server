@@ -206,8 +206,14 @@ def _make_buckets(
 
 
 def _quota_history(records: list[QuotaSnapshot]) -> list[dict]:
-    """Real polled quota readings as [{timestamp, percent_used}], oldest first."""
-    return [{"timestamp": format_timestamp(q.timestamp), "percent_used": q.percent_used} for q in records]
+    """Real polled quota readings as [{timestamp, percent_used, resets_at?}], oldest first."""
+    result = []
+    for q in records:
+        entry: dict = {"timestamp": format_timestamp(q.timestamp), "percent_used": q.percent_used}
+        if q.resets_at:
+            entry["resets_at"] = format_timestamp(q.resets_at)
+        result.append(entry)
+    return result
 
 
 def compute_analytics(
