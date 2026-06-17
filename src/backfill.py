@@ -11,8 +11,7 @@ pushing it; it can't be backfilled retroactively.
 Usage:
     uv run python backfill.py
     uv run python backfill.py --prod
-    uv run python backfill.py --server http://raspberrypi.local:5014
-    uv run python backfill.py --server http://localhost:5014 --batch-size 500
+    uv run python backfill.py --server http://localhost:FLASK_PORT
 
 Reads PROD_URL from a .env file in the same directory as this script (optional).
 """
@@ -28,8 +27,14 @@ import requests
 import typer
 from dotenv import load_dotenv
 from tqdm import tqdm
+from src.config import FLASK_PORT
 
 load_dotenv()
+
+_LOCAL_URL = f"http://localhost:{FLASK_PORT}"
+_JSON_HEADERS = {"Content-Type": "application/json"}
+_WORKERS = 4
+_BATCH_SIZE = 1000
 
 
 def find_jsonl_files(root: Path) -> list[Path]:
@@ -113,11 +118,6 @@ def load_all_records(claude_dir: Path) -> list[dict]:
     return records
 
 
-_WORKERS = 4
-_LOCAL_URL = "http://localhost:5014"
-_JSON_HEADERS = {"Content-Type": "application/json"}
-
-
 def post_batch(server: str, batch: list[dict]) -> tuple[int, int]:
     url = f"{server.rstrip('/')}/api/records"
     with requests.Session() as http:
@@ -130,7 +130,6 @@ def post_batch(server: str, batch: list[dict]) -> tuple[int, int]:
 def backfill_cli(
     server: str = typer.Option(_LOCAL_URL, help="Sync server base URL"),
     prod: bool = typer.Option(False, "--prod", help="Target production server (PROD_URL from .env)"),
-    batch_size: int = typer.Option(1000, help="Records per POST"),
     workers: int = typer.Option(_WORKERS, help="Concurrent POST threads"),
 ) -> None:
     """Backfill usage DB from local JSONL files."""
@@ -155,7 +154,7 @@ def backfill_cli(
         typer.secho("Nothing to backfill.", fg=typer.colors.YELLOW)
         return
 
-    batches = [records[i : i + batch_size] for i in range(0, len(records), batch_size)]
+    batches = [records[i : i + _BATCH_SIZE] for i in range(0, len(records), _BATCH_SIZE)]
     total_inserted = total_skipped = 0
 
     with (
