@@ -1,9 +1,0 @@
-[Unit]
-Description=Daily Claude ping (keeps Pro subscription active)
-After=network.target
-
-[Service]
-Type=oneshot
-User=mnalavadi
-ExecStart=/usr/local/bin/claude --permission-mode bypassPermissions ping
-ExecStart=/home/mnalavadi/.local/bin/uv run --directory /home/mnalavadi/claude-usage-notch-server backfill.py

@@ -1,98 +1,34 @@
-# Compiled Python files
-__pycache__/
-*.py[cod]
-*$py.class
-*.pyc
-*.pyo
-*.pyd
-*.pyw
-*.pyz
-*.pywz
-
-# Virtual environments
-venv/
-.venv/
-env/
-.env/
-ENV/
-env.bak/
-venv.bak/
-
-# Package management and build artifacts
-*.egg-info/
-.eggs/
-dist/
-build/
-*.egg
-.pytest_cache/
-.hypothesis/
-
-# Jupyter/IPython
-.ipynb_checkpoints/
-*.ipynb
-.ipython/
-.jupyter/
-
-# IDEs and editors
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-.dir-locals.el
-.envrc
-
-# Cache and temporary files
-.cache/
-tmp/
-temp/
-*.session
-dump.rdb
-joblib_cache/
-
-# Coverage and testing
-.coverage
-.coverage.*
-htmlcov/
-.tox/
-reports/
-*/.hypothesis/**
-
-# OS files
+# macOS
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
 
-# Secrets and credentials
-google_application_credentials.json
-*.pem
-*.key
+# IDE / editors
+.idea/
+.vscode/
+
+# Dev-only
+tmp/
+.claude/
+
+# Credentials / secrets
 .env
-.env.local
-secrets/
+.env.*
+credentials.json
+*token.json*
+*credentials.json*
+*.key
 
-# Media files
-*.mp4
-*.avi
-*.mov
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.coverage
 
-# Project-specific generated files
+# Database (local runtime data)
 *.db
-*.db-shm
-*.db-wal
-*.db.bk
-prototyping/
-cache/
-event_cache.json
-app_calendar_events.json
-recent_locations.html
-static/*.html
+*.sqlite
 
-# Local development
-.local/
-.ipython/
-.cursor/
+# Build artefacts
+deploy.sh
+sync.sh
