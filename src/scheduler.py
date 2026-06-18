@@ -111,7 +111,7 @@ def daily_ping(prod: bool = False) -> None:
     )
     logger.info("daily_ping: ping ok — %s", ping.stdout.strip())
 
-    backfill_cmd = ["uv", "run", "backfill"]
+    backfill_cmd = ["/home/mnalavadi/.local/bin/uv", "run", "backfill"]
     if prod:
         backfill_cmd.append("--prod")
 
