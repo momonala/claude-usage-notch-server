@@ -26,7 +26,7 @@ __pycache__/
 .coverage
 
 # Database (local runtime data)
-*.db
+*.db*
 *.sqlite
 
 # Build artefacts
