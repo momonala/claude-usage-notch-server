@@ -249,10 +249,18 @@ def test_analytics_includes_real_quota_history_within_window(client):
     body = client.get(f"/api/analytics?{_ANALYTICS_PARAMS}").get_json()
 
     assert body["session_quota_history"] == [
-        {"timestamp": "2026-06-11T08:00:00.000Z", "percent_used": 0.5, "resets_at": "2026-06-16T17:00:00.000Z"}
+        {
+            "timestamp": "2026-06-11T08:00:00.000Z",
+            "percent_used": 0.5,
+            "resets_at": "2026-06-16T17:00:00.000Z",
+        }
     ]
     assert body["weekly_quota_history"] == [
-        {"timestamp": "2026-06-06T00:00:00.000Z", "percent_used": 0.3, "resets_at": "2026-06-16T17:00:00.000Z"}
+        {
+            "timestamp": "2026-06-06T00:00:00.000Z",
+            "percent_used": 0.3,
+            "resets_at": "2026-06-16T17:00:00.000Z",
+        }
     ]
 
 
