@@ -120,13 +120,15 @@ def daily_ping(prod: bool = False) -> None:
         capture_output=True,
         text=True,
         timeout=_TIMEOUT_SECONDS,
-        check=True,
     )
     if backfill.stdout.strip():
         logger.info("daily_ping: backfill stdout:\n%s", backfill.stdout.rstrip())
     if backfill.stderr.strip():
         logger.info("daily_ping: backfill stderr:\n%s", backfill.stderr.rstrip())
-    logger.info("daily_ping: backfill ok")
+    if backfill.returncode != 0:
+        logger.error("daily_ping: backfill exited with code %d", backfill.returncode)
+    else:
+        logger.info("daily_ping: backfill ok")
 
 
 def scheduler_cli(
@@ -139,8 +141,8 @@ def scheduler_cli(
     logger.info("scheduler starting (source=%s, server=%s)", SOURCE, server)
 
     schedule.every(_QUOTA_POLL_INTERVAL_MINUTES).minutes.do(poll_quota, server)
-    schedule.every().day.at(_FIRST_DAILY_PING_TIME.strftime("%H:%M")).do(daily_ping, server)
-    schedule.every().day.at(_SECOND_DAILY_PING_TIME.strftime("%H:%M")).do(daily_ping, server)
+    schedule.every().day.at(_FIRST_DAILY_PING_TIME.strftime("%H:%M")).do(daily_ping, prod)
+    schedule.every().day.at(_SECOND_DAILY_PING_TIME.strftime("%H:%M")).do(daily_ping, prod)
 
     poll_quota(server)
 
