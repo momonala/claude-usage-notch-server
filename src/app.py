@@ -14,7 +14,7 @@ from src.database import init_db
 from src.routes import bp
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logging.getLogger("werkzeug").setLevel(logging.WARNING)
+logging.getLogger("werkzeug").setLevel(logging.DEBUG)
 
 
 def create_app() -> Flask:

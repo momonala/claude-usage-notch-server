@@ -103,7 +103,7 @@ def poll_quota(server: str) -> None:
 
     resp = requests.post(f"{server.rstrip('/')}/api/quota_snapshots", json=records, timeout=10)
     resp.raise_for_status()
-    logger.info("quota_poll: %s", resp.json())
+    logger.debug("quota_poll: %s", resp.json())
 
 
 def daily_ping(prod: bool = False) -> None:
