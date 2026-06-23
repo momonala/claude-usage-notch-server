@@ -29,7 +29,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 _USAGE_RE = re.compile(
-    r"Current (?P<label>[^:]+):\s+(?P<pct>\d+)%\s+used\s+·\s+resets\s+(?P<resets>.+?)(?:\s+\(|$)"
+    r"Current (?P<label>[^:]+):\s+(?P<pct>\d+)%\s+used(?:\s+·\s+resets\s+(?P<resets>.+?)(?:\s+\(|$))?"
 )
 _WINDOW_MAP = {"session": "five_hour", "week (all models)": "seven_day"}
 
@@ -83,18 +83,23 @@ def poll_quota(server: str) -> None:
         if not window_type:
             logger.warning("quota_poll: unrecognised label %r — skipping", label)
             continue
+        resets_raw = match.group("resets")
         records.append(
             {
                 "window_type": window_type,
                 "percent_used": float(match.group("pct")),
-                "resets_at": _parse_resets_at(match.group("resets")),
+                "resets_at": _parse_resets_at(resets_raw) if resets_raw else None,
                 "source": SOURCE,
                 "timestamp": now,
             }
         )
 
     if not records:
-        raise ValueError(f"no quota lines parsed from output:\n{result.stdout}")
+        raise ValueError(
+            f"no quota lines matched — the `claude /usage` output format may have changed.\n"
+            f"Expected lines like: 'Current session: 42% used'\n"
+            f"Got:\n{result.stdout.strip()}"
+        )
 
     resp = requests.post(f"{server.rstrip('/')}/api/quota_snapshots", json=records, timeout=10)
     resp.raise_for_status()
