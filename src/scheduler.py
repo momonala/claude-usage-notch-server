@@ -76,8 +76,9 @@ def poll_quota(server: str) -> None:
     )
 
     now = datetime.now(timezone.utc).isoformat()
+    output = result.stdout + "\n" + result.stderr
     records = []
-    for match in _USAGE_RE.finditer(result.stdout):
+    for match in _USAGE_RE.finditer(output):
         label = match.group("label").strip().lower()
         window_type = _WINDOW_MAP.get(label)
         if not window_type:
@@ -98,7 +99,7 @@ def poll_quota(server: str) -> None:
         raise ValueError(
             f"no quota lines matched — the `claude /usage` output format may have changed.\n"
             f"Expected lines like: 'Current session: 42% used'\n"
-            f"Got:\n{result.stdout.strip()}"
+            f"Got:\n{output.strip()}"
         )
 
     resp = requests.post(f"{server.rstrip('/')}/api/quota_snapshots", json=records, timeout=10)
