@@ -27,6 +27,7 @@ import requests
 import typer
 from dotenv import load_dotenv
 from tqdm import tqdm
+
 from src.config import FLASK_PORT
 
 load_dotenv()

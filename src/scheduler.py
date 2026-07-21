@@ -11,10 +11,10 @@ import os
 import re
 import socket
 import subprocess
-from datetime import datetime
-from datetime import timezone
-from datetime import timedelta
 import time
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 
 import requests
 import schedule
@@ -32,6 +32,7 @@ _USAGE_RE = re.compile(
     r"Current (?P<label>[^:]+):\s+(?P<pct>\d+)%\s+used(?:\s+·\s+resets\s+(?P<resets>.+?)(?:\s+\(|$))?"
 )
 _WINDOW_MAP = {"session": "five_hour", "week (all models)": "seven_day"}
+_SUBSCRIPTION_ONLY_MARKER = "You are currently using your subscription to power your Claude Code usage"
 
 _DEFAULT_SERVER = f"http://localhost:{FLASK_PORT}"
 SOURCE = socket.gethostname()
@@ -56,6 +57,12 @@ def _parse_resets_at(raw: str) -> str | None:
     return None
 
 
+def _is_subscription_only_output(output: str) -> bool:
+    """Return True when /usage returned the subscription banner but no quota lines."""
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    return len(lines) == 1 and lines[0] == _SUBSCRIPTION_ONLY_MARKER
+
+
 def _resolve_server(server: str, prod: bool) -> str:
     if prod:
         prod_url = os.environ.get("PROD_URL")
@@ -66,14 +73,26 @@ def _resolve_server(server: str, prod: bool) -> str:
     return server
 
 
+def _log_claude_failure(task: str, result: subprocess.CompletedProcess[str]) -> None:
+    logger.error(
+        "%s: claude exited %d\nstdout: %s\nstderr: %s",
+        task,
+        result.returncode,
+        result.stdout.strip(),
+        result.stderr.strip(),
+    )
+
+
 def poll_quota(server: str) -> None:
     result = subprocess.run(
         ["claude", "--permission-mode", "bypassPermissions", "-p", "/usage"],
         capture_output=True,
         text=True,
         timeout=_TIMEOUT_SECONDS,
-        check=True,
     )
+    if result.returncode != 0:
+        _log_claude_failure("quota_poll", result)
+        return
 
     now = datetime.now(timezone.utc).isoformat()
     output = result.stdout + "\n" + result.stderr
@@ -96,11 +115,15 @@ def poll_quota(server: str) -> None:
         )
 
     if not records:
-        raise ValueError(
-            f"no quota lines matched — the `claude /usage` output format may have changed.\n"
-            f"Expected lines like: 'Current session: 42% used'\n"
-            f"Got:\n{output.strip()}"
+        if _is_subscription_only_output(output):
+            logger.debug("quota_poll: subscription-only /usage output (no quota lines) — skipping")
+            return
+        logger.warning(
+            "quota_poll: no quota lines matched — the `claude /usage` output format may have "
+            "changed.\nExpected lines like: 'Current session: 42%% used'\nGot:\n%s",
+            output.strip(),
         )
+        return
 
     resp = requests.post(f"{server.rstrip('/')}/api/quota_snapshots", json=records, timeout=10)
     resp.raise_for_status()
@@ -109,15 +132,25 @@ def poll_quota(server: str) -> None:
 
 def daily_ping(prod: bool = False) -> None:
     ping = subprocess.run(
-        ["claude", "--permission-mode", "bypassPermissions", "--model", "haiku", "ping reply in one word"],
+        [
+            "claude",
+            "--permission-mode",
+            "bypassPermissions",
+            "--model",
+            "haiku",
+            "-p",
+            "ping reply in one word",
+        ],
         capture_output=True,
         text=True,
         timeout=_TIMEOUT_SECONDS,
-        check=True,
     )
-    logger.info("daily_ping: ping ok — %s", ping.stdout.strip())
+    if ping.returncode != 0:
+        _log_claude_failure("daily_ping", ping)
+    else:
+        logger.info("daily_ping: ping ok — %s", ping.stdout.strip())
 
-    backfill_cmd = ["/home/mnalavadi/.local/bin/uv", "run", "backfill"]
+    backfill_cmd = ["uv", "run", "backfill"]
     if prod:
         backfill_cmd.append("--prod")
 

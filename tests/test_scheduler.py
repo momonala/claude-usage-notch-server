@@ -2,7 +2,11 @@
 
 import pytest
 
-from src.scheduler import _USAGE_RE, _WINDOW_MAP, _parse_resets_at
+from src.scheduler import _SUBSCRIPTION_ONLY_MARKER
+from src.scheduler import _USAGE_RE
+from src.scheduler import _WINDOW_MAP
+from src.scheduler import _is_subscription_only_output
+from src.scheduler import _parse_resets_at
 
 # Two real output variants from `claude -p /usage`
 _OUTPUT_COMMA = """\
@@ -24,6 +28,8 @@ Approximate, based on local sessions on this machine — does not include other 
 Last 24h · 305 requests · 11 sessions
   37% of your usage was at >150k context
 """
+
+_OUTPUT_SUBSCRIPTION_ONLY = f"{_SUBSCRIPTION_ONLY_MARKER}\n"
 
 
 def _parse_output(text: str) -> list[dict]:
@@ -78,6 +84,17 @@ class TestRegex:
     def test_extra_content_does_not_produce_spurious_matches(self):
         records = _parse_output(_OUTPUT_AT)
         assert len(records) == 2
+
+
+class TestSubscriptionOnlyOutput:
+    def test_detects_subscription_only_banner(self):
+        assert _is_subscription_only_output(_OUTPUT_SUBSCRIPTION_ONLY)
+
+    def test_full_output_is_not_subscription_only(self):
+        assert not _is_subscription_only_output(_OUTPUT_COMMA)
+
+    def test_subscription_only_produces_no_records(self):
+        assert _parse_output(_OUTPUT_SUBSCRIPTION_ONLY) == []
 
 
 class TestParseResetsAt:
