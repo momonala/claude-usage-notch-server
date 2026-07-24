@@ -9,6 +9,7 @@ Tasks:
 import logging
 import os
 import re
+import shutil
 import socket
 import subprocess
 import time
@@ -150,7 +151,8 @@ def daily_ping(prod: bool = False) -> None:
     else:
         logger.info("daily_ping: ping ok — %s", ping.stdout.strip())
 
-    backfill_cmd = ["uv", "run", "backfill"]
+    uv_bin = shutil.which("uv") or "/home/mnalavadi/.local/bin/uv"
+    backfill_cmd = [uv_bin, "run", "backfill"]
     if prod:
         backfill_cmd.append("--prod")
 
