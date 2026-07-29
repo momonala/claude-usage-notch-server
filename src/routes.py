@@ -28,6 +28,7 @@ from src.models import QuotaSnapshot
 from src.models import UsageRecord
 from src.models import UsageStats
 from src.models import parse_timestamp
+from src.telemetry import metrics
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,8 @@ def post_records():
     inserted = result.rowcount if result.rowcount >= 0 else len(uuids)
     skipped = len(uuids) - inserted
     logger.info("POST /api/records: inserted=%d skipped=%d", inserted, skipped)
+    metrics.increment("records_inserted", inserted)
+    metrics.increment("records_skipped", skipped)
     return jsonify({"inserted": inserted, "skipped": skipped})
 
 
@@ -142,6 +145,8 @@ def post_quota_snapshots():
     inserted = result.rowcount if result.rowcount >= 0 else len(rows)
     skipped = len(rows) - inserted
     logger.info("POST /api/quota_snapshots: inserted=%d skipped=%d", inserted, skipped)
+    metrics.increment("quota_snapshots_inserted", inserted)
+    metrics.increment("quota_snapshots_skipped", skipped)
     return jsonify({"inserted": inserted, "skipped": skipped})
 
 
@@ -206,45 +211,39 @@ def get_analytics():
     # month — the lookback can be shorter (7D) or longer (All) than a month.
     fetch_cutoff = min(lookback_cutoff, month_cutoff)
 
-    with session_scope() as db:
-        windowed = db.scalars(
-            select(UsageRecord).where(UsageRecord.timestamp >= fetch_cutoff).order_by(UsageRecord.timestamp)
-        ).all()
-        stats = db.get(UsageStats, 1)
-        lifetime_cost = stats.lifetime_cost if stats is not None else 0.0
+    with metrics.timed("duration"):
+        with session_scope() as db:
+            windowed = db.scalars(
+                select(UsageRecord)
+                .where(UsageRecord.timestamp >= fetch_cutoff)
+                .order_by(UsageRecord.timestamp)
+            ).all()
+            stats = db.get(UsageStats, 1)
+            lifetime_cost = stats.lifetime_cost if stats is not None else 0.0
 
-        # Real polled quota readings (ground truth) for the same spans as the
-        # session/weekly token buckets below. Empty until a client has pushed at
-        # least one reading — the app falls back to its token-based estimate then.
-        session_quota_records = db.scalars(
-            select(QuotaSnapshot)
-            .where(QuotaSnapshot.window_type == "session", QuotaSnapshot.timestamp >= session_cutoff)
-            .order_by(QuotaSnapshot.timestamp)
-        ).all()
-        weekly_quota_records = db.scalars(
-            select(QuotaSnapshot)
-            .where(QuotaSnapshot.window_type == "weekly", QuotaSnapshot.timestamp >= weekly_cutoff)
-            .order_by(QuotaSnapshot.timestamp)
-        ).all()
+            # Real polled quota readings (ground truth) for the same spans as the
+            # session/weekly token buckets below. Empty until a client has pushed at
+            # least one reading — the app falls back to its token-based estimate then.
+            session_quota_records = db.scalars(
+                select(QuotaSnapshot)
+                .where(QuotaSnapshot.window_type == "session", QuotaSnapshot.timestamp >= session_cutoff)
+                .order_by(QuotaSnapshot.timestamp)
+            ).all()
+            weekly_quota_records = db.scalars(
+                select(QuotaSnapshot)
+                .where(QuotaSnapshot.window_type == "weekly", QuotaSnapshot.timestamp >= weekly_cutoff)
+                .order_by(QuotaSnapshot.timestamp)
+            ).all()
 
-    # Records are sorted by timestamp; bisect avoids multiple O(n) linear scans.
-    timestamps = [r.timestamp for r in windowed]
-    lookback_records = windowed[bisect.bisect_left(timestamps, lookback_cutoff) :]
-    month_records = windowed[bisect.bisect_left(timestamps, month_cutoff) :]
-    weekly_records = windowed[bisect.bisect_left(timestamps, weekly_cutoff) :]
-    session_records = windowed[bisect.bisect_left(timestamps, session_cutoff) :]
-    session_cost_records = windowed[bisect.bisect_left(timestamps, session_cost_cutoff) :]
+        # Records are sorted by timestamp; bisect avoids multiple O(n) linear scans.
+        timestamps = [r.timestamp for r in windowed]
+        lookback_records = windowed[bisect.bisect_left(timestamps, lookback_cutoff) :]
+        month_records = windowed[bisect.bisect_left(timestamps, month_cutoff) :]
+        weekly_records = windowed[bisect.bisect_left(timestamps, weekly_cutoff) :]
+        session_records = windowed[bisect.bisect_left(timestamps, session_cutoff) :]
+        session_cost_records = windowed[bisect.bisect_left(timestamps, session_cost_cutoff) :]
 
-    logger.info(
-        "GET /api/analytics: session=%d session_cost=%d weekly=%d month=%d lookback=%d records",
-        len(session_records),
-        len(session_cost_records),
-        len(weekly_records),
-        len(month_records),
-        len(lookback_records),
-    )
-    return jsonify(
-        compute_analytics(
+        result = compute_analytics(
             session_records,
             weekly_records,
             month_records,
@@ -258,4 +257,13 @@ def get_analytics():
             session_quota_records,
             weekly_quota_records,
         )
+
+    logger.info(
+        "GET /api/analytics: session=%d session_cost=%d weekly=%d month=%d lookback=%d records",
+        len(session_records),
+        len(session_cost_records),
+        len(weekly_records),
+        len(month_records),
+        len(lookback_records),
     )
+    return jsonify(result)

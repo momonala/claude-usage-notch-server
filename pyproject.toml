@@ -21,6 +21,7 @@ dependencies = [
     "orjson>=3.10",
     "schedule>=1.2.2",
     "vulture>=2.16",
+    "spyglass",
 ]
 
 [project.optional-dependencies]
@@ -39,6 +40,8 @@ dev = [
 flask_port = 5014
 flask_host = "0.0.0.0"
 db_path = "claude-usage.db"
+spyglass_host = "localhost:5013"
+spyglass_dashboard_url = "https://spyglass.mnalavadi.org/dashboard/claude-usage-notch-server"
 
 [build-system]
 requires = ["hatchling"]
@@ -88,3 +91,6 @@ exclude_lines = [
 
 [tool.uv]
 exclude-newer = "2026-06-12T00:00:00Z"
+
+[tool.uv.sources]
+spyglass = { git = "https://github.com/momonala/spyglass.git", rev = "main" }

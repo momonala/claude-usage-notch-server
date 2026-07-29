@@ -23,10 +23,10 @@ import typer
 from dotenv import load_dotenv
 
 from src.config import FLASK_PORT
+from src.telemetry import metrics
 
 load_dotenv()
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
 _USAGE_RE = re.compile(
@@ -85,14 +85,16 @@ def _log_claude_failure(task: str, result: subprocess.CompletedProcess[str]) -> 
 
 
 def poll_quota(server: str) -> None:
-    result = subprocess.run(
-        ["claude", "--permission-mode", "bypassPermissions", "-p", "/usage"],
-        capture_output=True,
-        text=True,
-        timeout=_TIMEOUT_SECONDS,
-    )
+    with metrics.timed("duration"):
+        result = subprocess.run(
+            ["claude", "--permission-mode", "bypassPermissions", "-p", "/usage"],
+            capture_output=True,
+            text=True,
+            timeout=_TIMEOUT_SECONDS,
+        )
     if result.returncode != 0:
         _log_claude_failure("quota_poll", result)
+        metrics.increment("claude_error")
         return
 
     now = datetime.now(timezone.utc).isoformat()
@@ -103,6 +105,7 @@ def poll_quota(server: str) -> None:
         window_type = _WINDOW_MAP.get(label)
         if not window_type:
             logger.warning("quota_poll: unrecognised label %r — skipping", label)
+            metrics.increment("unrecognised_label")
             continue
         resets_raw = match.group("resets")
         records.append(
@@ -124,11 +127,13 @@ def poll_quota(server: str) -> None:
             "changed.\nExpected lines like: 'Current session: 42%% used'\nGot:\n%s",
             output.strip(),
         )
+        metrics.increment("no_quota_lines_matched")
         return
 
     resp = requests.post(f"{server.rstrip('/')}/api/quota_snapshots", json=records, timeout=10)
     resp.raise_for_status()
     logger.debug("quota_poll: %s", resp.json())
+    metrics.increment("success")
 
 
 def daily_ping(prod: bool = False) -> None:
@@ -148,28 +153,33 @@ def daily_ping(prod: bool = False) -> None:
     )
     if ping.returncode != 0:
         _log_claude_failure("daily_ping", ping)
+        metrics.increment("ping_failure")
     else:
         logger.info("daily_ping: ping ok — %s", ping.stdout.strip())
+        metrics.increment("ping_success")
 
     uv_bin = shutil.which("uv") or "/home/mnalavadi/.local/bin/uv"
     backfill_cmd = [uv_bin, "run", "backfill"]
     if prod:
         backfill_cmd.append("--prod")
 
-    backfill = subprocess.run(
-        backfill_cmd,
-        capture_output=True,
-        text=True,
-        timeout=_TIMEOUT_SECONDS,
-    )
+    with metrics.timed("backfill_duration"):
+        backfill = subprocess.run(
+            backfill_cmd,
+            capture_output=True,
+            text=True,
+            timeout=_TIMEOUT_SECONDS,
+        )
     if backfill.stdout.strip():
         logger.info("daily_ping: backfill stdout:\n%s", backfill.stdout.rstrip())
     if backfill.stderr.strip():
         logger.info("daily_ping: backfill stderr:\n%s", backfill.stderr.rstrip())
     if backfill.returncode != 0:
         logger.error("daily_ping: backfill exited with code %d", backfill.returncode)
+        metrics.increment("backfill_failure")
     else:
         logger.info("daily_ping: backfill ok")
+        metrics.increment("backfill_success")
 
 
 def scheduler_cli(

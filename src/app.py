@@ -12,9 +12,9 @@ from src.config import FLASK_HOST
 from src.config import FLASK_PORT
 from src.database import init_db
 from src.routes import bp
+from src.telemetry import logger as _telemetry_logger  # noqa: F401  (wires stdout + Spyglass logging)
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logging.getLogger("werkzeug").setLevel(logging.DEBUG)
+logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
 
 def create_app() -> Flask:

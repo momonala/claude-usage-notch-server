@@ -29,6 +29,7 @@ from dotenv import load_dotenv
 from tqdm import tqdm
 
 from src.config import FLASK_PORT
+from src.telemetry import metrics
 
 load_dotenv()
 
@@ -158,18 +159,24 @@ def backfill_cli(
     batches = [records[i : i + _BATCH_SIZE] for i in range(0, len(records), _BATCH_SIZE)]
     total_inserted = total_skipped = 0
 
-    with (
-        ThreadPoolExecutor(max_workers=workers) as pool,
-        tqdm(total=len(batches), desc="Posting batches", unit="batch") as bar,
-    ):
-        futures = {pool.submit(post_batch, server, batch): batch for batch in batches}
-        for future in as_completed(futures):
-            inserted, skipped = future.result()
-            total_inserted += inserted
-            total_skipped += skipped
-            bar.set_postfix(inserted=total_inserted, skipped=total_skipped)
-            bar.update(1)
+    try:
+        with (
+            ThreadPoolExecutor(max_workers=workers) as pool,
+            tqdm(total=len(batches), desc="Posting batches", unit="batch") as bar,
+        ):
+            futures = {pool.submit(post_batch, server, batch): batch for batch in batches}
+            for future in as_completed(futures):
+                inserted, skipped = future.result()
+                total_inserted += inserted
+                total_skipped += skipped
+                bar.set_postfix(inserted=total_inserted, skipped=total_skipped)
+                bar.update(1)
+    except requests.RequestException as e:
+        metrics.increment("backfill_failure")
+        typer.secho(f"Error: batch POST failed: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from e
 
+    metrics.increment("backfill_success")
     typer.secho(
         f"\nDone. Total inserted={total_inserted} skipped={total_skipped}",
         fg=typer.colors.GREEN,

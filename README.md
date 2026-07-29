@@ -28,6 +28,8 @@ under `[tool.config]` and is read by `src/config.py`.
 flask_port = 5014          # port the API listens on
 flask_host = "0.0.0.0"     # bind address
 db_path = "claude-usage.db"  # SQLite file, relative to the working directory
+spyglass_host = "localhost:5013"  # where this service's own metrics/logs are shipped
+spyglass_dashboard_url = "https://spyglass.mnalavadi.org/dashboard/claude-usage-notch-server"
 ```
 
 `install.sh` reads `flask_port` and the project name via `uv run config` to wire up
@@ -60,6 +62,31 @@ migration tooling, since it's a single-user store with no reverse-compatibility 
 | `src/analytics.py` | On-demand aggregation for `/api/analytics` (cost, breakdowns, buckets) |
 | `src/database.py` | Engine, `session_scope`, `init_db` |
 | `src/config.py` | All config (read from `pyproject.toml`) + `DATABASE_URL`; CLI for install scripts |
+| `src/telemetry.py` | Self-observability: `initialize()`s this service against [Spyglass](https://github.com/momonala/spyglass) once per process, exporting `logger`/`metrics` |
+
+## Observability
+
+This service reports its own operational metrics and logs to a [Spyglass](https://github.com/momonala/spyglass)
+server (see `src/telemetry.py`), separate from the usage data it stores about *other*
+Claude Code sessions. `src/telemetry.py` is imported once per process entry point
+(`app.py`, `scheduler.py`) — each import calls `spyglass.initialize()` exactly once,
+which attaches a log-shipping handler to the root logger and creates the shared
+`metrics` collector; every module in that process gets remote log shipping for free
+via propagation, and imports `metrics` from `src.telemetry` when it needs to emit a
+counter or timing. Don't call `initialize()` a second time within the same process —
+it isn't idempotent and would attach a duplicate log handler.
+
+Metrics emitted (stat names auto-prefixed `claude-usage-notch-server.{function}.*`):
+
+| Stat | Where | Meaning |
+|------|-------|---------|
+| `post_records.records_inserted` / `records_skipped` | `routes.py` | `/api/records` ingest volume |
+| `post_quota_snapshots.quota_snapshots_inserted` / `quota_snapshots_skipped` | `routes.py` | `/api/quota_snapshots` ingest volume |
+| `get_analytics.duration` | `routes.py` | `/api/analytics` latency (full-table scan for `lifetime_cost` on every call) |
+| `poll_quota.duration` | `scheduler.py` | `claude -p /usage` subprocess latency |
+| `poll_quota.success` / `claude_error` / `unrecognised_label` / `no_quota_lines_matched` | `scheduler.py` | Quota-poll outcome, including early warning if `claude`'s `/usage` output format drifts |
+| `daily_ping.ping_success` / `ping_failure` | `scheduler.py` | Subscription keep-alive ping outcome |
+| `daily_ping.backfill_duration`, `backfill_success` / `backfill_failure` | `scheduler.py` | Nightly backfill subprocess outcome/latency |
 
 ## API
 

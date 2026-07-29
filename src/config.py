@@ -27,6 +27,8 @@ FLASK_PORT = _tool["flask_port"]
 FLASK_HOST = _tool["flask_host"]
 DB_PATH = _tool["db_path"]
 DATABASE_URL = f"sqlite:///{DB_PATH}"
+SPYGLASS_HOST = _tool["spyglass_host"]
+SPYGLASS_DASHBOARD_URL = _tool["spyglass_dashboard_url"]
 
 
 def config_cli(
@@ -34,12 +36,16 @@ def config_cli(
     project_name: bool = typer.Option(False, "--project-name", help="Print the project name"),
     project_version: bool = typer.Option(False, "--project-version", help="Print the project version"),
     flask_port: bool = typer.Option(False, "--flask-port", help="Print the Flask port"),
+    spyglass_dashboard_url: bool = typer.Option(
+        False, "--spyglass-dashboard-url", help="Print the Spyglass dashboard URL"
+    ),
 ) -> None:
     """Expose non-secret configuration to install scripts."""
     if all:
         typer.echo(f"project_name={PROJECT_NAME}")
         typer.echo(f"project_version={PROJECT_VERSION}")
         typer.echo(f"flask_port={FLASK_PORT}")
+        typer.echo(f"spyglass_dashboard_url={SPYGLASS_DASHBOARD_URL}")
         return
 
     if project_name:
@@ -48,6 +54,8 @@ def config_cli(
         typer.echo(PROJECT_VERSION)
     elif flask_port:
         typer.echo(FLASK_PORT)
+    elif spyglass_dashboard_url:
+        typer.echo(SPYGLASS_DASHBOARD_URL)
     else:
         typer.secho(
             "Error: No config key specified. Use --help to see available options.",
