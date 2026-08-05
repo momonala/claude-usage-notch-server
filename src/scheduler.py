@@ -163,13 +163,12 @@ def daily_ping(prod: bool = False) -> None:
     if prod:
         backfill_cmd.append("--prod")
 
-    with metrics.timed("backfill_duration"):
-        backfill = subprocess.run(
-            backfill_cmd,
-            capture_output=True,
-            text=True,
-            timeout=_TIMEOUT_SECONDS,
-        )
+    backfill = subprocess.run(
+        backfill_cmd,
+        capture_output=True,
+        text=True,
+        timeout=_TIMEOUT_SECONDS,
+    )
     if backfill.stdout.strip():
         logger.info("daily_ping: backfill stdout:\n%s", backfill.stdout.rstrip())
     if backfill.stderr.strip():

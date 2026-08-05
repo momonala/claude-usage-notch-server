@@ -91,7 +91,6 @@ def post_records():
     skipped = len(uuids) - inserted
     logger.info("POST /api/records: inserted=%d skipped=%d", inserted, skipped)
     metrics.increment("records_inserted", inserted)
-    metrics.increment("records_skipped", skipped)
     return jsonify({"inserted": inserted, "skipped": skipped})
 
 
@@ -144,9 +143,8 @@ def post_quota_snapshots():
 
     inserted = result.rowcount if result.rowcount >= 0 else len(rows)
     skipped = len(rows) - inserted
-    logger.info("POST /api/quota_snapshots: inserted=%d skipped=%d", inserted, skipped)
+    logger.debug("POST /api/quota_snapshots: inserted=%d skipped=%d", inserted, skipped)
     metrics.increment("quota_snapshots_inserted", inserted)
-    metrics.increment("quota_snapshots_skipped", skipped)
     return jsonify({"inserted": inserted, "skipped": skipped})
 
 
