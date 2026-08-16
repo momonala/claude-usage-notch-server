@@ -1,8 +1,0 @@
-[Unit]
-Description=Claude usage notch daily ping + backfill (one-shot)
-
-[Service]
-Type=oneshot
-WorkingDirectory=/home/mnalavadi/claude-usage-notch-server
-ExecStart=/home/mnalavadi/.local/bin/uv run scheduler daily-ping
-User=mnalavadi

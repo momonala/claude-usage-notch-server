@@ -27,27 +27,17 @@ echo "📋 Configuration:"
     echo -e "   ${CYAN}cloudflare_domain${NC}|${YELLOW}${service_name}.mnalavadi.org${NC}"
 } | column -t -s '|'
 
-services=("projects_${service_name}")
-timers=("projects_${service_name}_poll_quota" "projects_${service_name}_daily_ping")
+services=("projects_${service_name}" "projects_${service_name}_scheduler")
 ping_unit="projects_${service_name}_ping"
-legacy_scheduler_unit="projects_${service_name}_scheduler"
 
 echo "✅ Copying service files to systemd directory"
-for service in "${services[@]}" "${timers[@]}"; do
+for service in "${services[@]}"; do
     sudo cp install/${service}.service /lib/systemd/system/${service}.service
     sudo chmod 644 /lib/systemd/system/${service}.service
 done
 
-echo "✅ Copying timer files to systemd directory"
-for timer in "${timers[@]}"; do
-    sudo cp install/${timer}.timer /lib/systemd/system/${timer}.timer
-    sudo chmod 644 /lib/systemd/system/${timer}.timer
-done
-
-echo "✅ Disabling legacy ping timer and scheduler daemon (replaced by poll_quota/daily_ping timers)"
+echo "✅ Disabling legacy ping timer (replaced by scheduler)"
 sudo systemctl disable --now ${ping_unit}.timer 2>/dev/null || true
-sudo systemctl disable --now ${legacy_scheduler_unit}.service 2>/dev/null || true
-sudo rm -f /lib/systemd/system/${legacy_scheduler_unit}.service
 
 echo "✅ Reloading systemd daemon"
 sudo systemctl daemon-reload
@@ -58,12 +48,6 @@ for service in "${services[@]}"; do
     sudo systemctl enable ${service}.service
     sudo systemctl restart ${service}.service
     sudo systemctl status ${service}.service --no-pager
-done
-
-for timer in "${timers[@]}"; do
-    echo "✅ Enabling the timer: ${timer}.timer"
-    sudo systemctl enable --now ${timer}.timer
-    sudo systemctl status ${timer}.timer --no-pager
 done
 
 echo "✅ Adding Cloudflared service"

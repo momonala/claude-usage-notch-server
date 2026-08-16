@@ -1,9 +1,9 @@
 """
 Periodic task runner for the Claude Usage Notch server.
 
-Invoked one-shot by systemd timers (see install/*.timer):
-  - poll-quota  (every 2 min)  — runs `claude -p /usage`, parses quota %, POSTs to /api/quota_snapshots
-  - daily-ping  (twice a day)  — keeps Pro subscription alive + runs backfill
+Tasks:
+  - quota_poll  (every 5 min)  — runs `claude -p /usage`, parses quota %, POSTs to /api/quota_snapshots
+  - daily_ping  (every day)    — keeps Pro subscription alive + runs backfill
 """
 
 import logging
@@ -12,10 +12,13 @@ import re
 import shutil
 import socket
 import subprocess
+import time
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 
 import requests
+import schedule
 import typer
 from dotenv import load_dotenv
 
@@ -35,11 +38,11 @@ _SUBSCRIPTION_ONLY_MARKER = "You are currently using your subscription to power 
 _DEFAULT_SERVER = f"http://localhost:{FLASK_PORT}"
 SOURCE = socket.gethostname()
 
+_QUOTA_POLL_INTERVAL_MINUTES = 2
+now = datetime.now()
+_FIRST_DAILY_PING_TIME = now.replace(hour=5, minute=30)
+_SECOND_DAILY_PING_TIME = _FIRST_DAILY_PING_TIME + timedelta(hours=5, minutes=1)
 _TIMEOUT_SECONDS = 60
-
-app = typer.Typer(
-    add_completion=False, no_args_is_help=True, help="Periodic task runner (one-shot per invocation)."
-)
 
 
 def _parse_resets_at(raw: str) -> str | None:
@@ -178,28 +181,28 @@ def daily_ping(prod: bool = False) -> None:
         metrics.increment("backfill_success")
 
 
-@app.command("poll-quota")
-def poll_quota_cli(
+def scheduler_cli(
     server: str = typer.Option(_DEFAULT_SERVER, "--server", help="Sync server base URL"),
     prod: bool = typer.Option(False, "--prod", help="Target production server (PROD_URL from .env)"),
 ) -> None:
-    """Run a single quota poll and exit."""
+    """Periodic task runner for quota polling and daily pings."""
     server = _resolve_server(server, prod)
-    logger.info("poll-quota starting (source=%s, server=%s)", SOURCE, server)
+    typer.secho(f"Target server: {server}", fg=typer.colors.MAGENTA, bold=True)
+    logger.info("scheduler starting (source=%s, server=%s)", SOURCE, server)
+
+    schedule.every(_QUOTA_POLL_INTERVAL_MINUTES).minutes.do(poll_quota, server)
+    schedule.every().day.at(_FIRST_DAILY_PING_TIME.strftime("%H:%M")).do(daily_ping, prod)
+    schedule.every().day.at(_SECOND_DAILY_PING_TIME.strftime("%H:%M")).do(daily_ping, prod)
+
     poll_quota(server)
 
-
-@app.command("daily-ping")
-def daily_ping_cli(
-    prod: bool = typer.Option(False, "--prod", help="Target production server (PROD_URL from .env)"),
-) -> None:
-    """Run the daily ping + backfill once and exit."""
-    logger.info("daily-ping starting (source=%s, prod=%s)", SOURCE, prod)
-    daily_ping(prod)
+    while True:
+        schedule.run_pending()
+        time.sleep(10)
 
 
 def main() -> None:
-    app()
+    typer.run(scheduler_cli)
 
 
 if __name__ == "__main__":

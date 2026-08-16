@@ -204,9 +204,6 @@ window_type, timestamp, percent_used, resets_at, source
 
 ## Deployment
 
-`install/install.sh` installs the Flask app as a systemd service on the
-Raspberry Pi (`projects_claude-usage-notch-server.service`), installs
-`poll_quota` and `daily_ping` as one-shot systemd services triggered by
-`.timer` units (every 2 min and twice daily, respectively — see
-`scheduler.py`), and registers a Cloudflare tunnel route at
-`claude-usage-notch-server.mnalavadi.org`.
+`install/install.sh` installs a systemd service on the Raspberry Pi
+(`projects_claude-usage-notch-server.service`) and registers a Cloudflare
+tunnel route at `claude-usage-notch-server.mnalavadi.org`.
