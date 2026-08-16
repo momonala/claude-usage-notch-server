@@ -1,0 +1,8 @@
+[Unit]
+Description=Claude usage notch quota poll (one-shot)
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/mnalavadi/claude-usage-notch-server
+ExecStart=/home/mnalavadi/.local/bin/uv run scheduler poll-quota
+User=mnalavadi

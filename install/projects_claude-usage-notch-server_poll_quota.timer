@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the Claude usage notch quota poll every 2 minutes
+
+[Timer]
+OnBootSec=30
+OnUnitActiveSec=2min
+Unit=projects_claude-usage-notch-server_poll_quota.service
+
+[Install]
+WantedBy=timers.target

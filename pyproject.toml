@@ -19,7 +19,6 @@ dependencies = [
     "tqdm>=4.68.2",
     "requests>=2.32",
     "orjson>=3.10",
-    "schedule>=1.2.2",
     "vulture>=2.16",
     "spyglass",
 ]
