@@ -12,6 +12,7 @@ from src.config import FLASK_HOST
 from src.config import FLASK_PORT
 from src.database import init_db
 from src.routes import bp
+from src.scheduler import start as start_scheduler
 from src.telemetry import logger as _telemetry_logger  # noqa: F401  (wires stdout + Spyglass logging)
 
 logging.getLogger("werkzeug").setLevel(logging.WARNING)
@@ -21,6 +22,7 @@ def create_app() -> Flask:
     app = Flask(__name__)
     app.register_blueprint(bp)
     init_db()
+    start_scheduler()
     return app
 
 

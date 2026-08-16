@@ -19,9 +19,9 @@ dependencies = [
     "tqdm>=4.68.2",
     "requests>=2.32",
     "orjson>=3.10",
-    "schedule>=1.2.2",
     "vulture>=2.16",
     "spyglass",
+    "apscheduler>=3.11.2",
 ]
 
 [project.optional-dependencies]
@@ -54,7 +54,6 @@ packages = ["."]
 config = "src.config:main"
 app = "src.app:main"
 backfill = "src.backfill:main"
-scheduler = "src.scheduler:main"
 
 [tool.black]
 line-length = 110

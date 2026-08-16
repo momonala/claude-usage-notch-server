@@ -62,6 +62,7 @@ migration tooling, since it's a single-user store with no reverse-compatibility 
 | `src/analytics.py` | On-demand aggregation for `/api/analytics` (cost, breakdowns, buckets) |
 | `src/database.py` | Engine, `session_scope`, `init_db` |
 | `src/config.py` | All config (read from `pyproject.toml`) + `DATABASE_URL`; CLI for install scripts |
+| `src/scheduler.py` | Quota polling + daily ping/backfill jobs, run in-process via APScheduler (`start()` is called from `create_app()`) |
 | `src/telemetry.py` | Self-observability: `initialize()`s this service against [Spyglass](https://github.com/momonala/spyglass) once per process, exporting `logger`/`metrics` |
 
 ## Observability
@@ -69,10 +70,10 @@ migration tooling, since it's a single-user store with no reverse-compatibility 
 This service reports its own operational metrics and logs to a [Spyglass](https://github.com/momonala/spyglass)
 server (see `src/telemetry.py`), separate from the usage data it stores about *other*
 Claude Code sessions. `src/telemetry.py` is imported once per process entry point
-(`app.py`, `scheduler.py`) — each import calls `spyglass.initialize()` exactly once,
-which attaches a log-shipping handler to the root logger and creates the shared
-`metrics` collector; every module in that process gets remote log shipping for free
-via propagation, and imports `metrics` from `src.telemetry` when it needs to emit a
+(`app.py`) — the import calls `spyglass.initialize()` exactly once, which attaches
+a log-shipping handler to the root logger and creates the shared `metrics`
+collector; every module in that process gets remote log shipping for free via
+propagation, and imports `metrics` from `src.telemetry` when it needs to emit a
 counter or timing. Don't call `initialize()` a second time within the same process —
 it isn't idempotent and would attach a duplicate log handler.
 

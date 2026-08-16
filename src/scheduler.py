@@ -1,31 +1,27 @@
-"""
-Periodic task runner for the Claude Usage Notch server.
+"""Periodic task runner for the Claude Usage Notch server.
+
+Runs in-process as an APScheduler `BackgroundScheduler`, started by
+`create_app()` when the Flask app boots (see `app.py`) — there is no separate
+scheduler process or systemd unit.
 
 Tasks:
-  - quota_poll  (every 5 min)  — runs `claude -p /usage`, parses quota %, POSTs to /api/quota_snapshots
-  - daily_ping  (every day)    — keeps Pro subscription alive + runs backfill
+  - quota_poll  (every 2 min)  — runs `claude -p /usage`, parses quota %, POSTs to /api/quota_snapshots
+  - daily_ping  (twice a day)  — keeps Pro subscription alive + runs backfill
 """
 
 import logging
-import os
 import re
 import shutil
 import socket
 import subprocess
-import time
 from datetime import datetime
-from datetime import timedelta
 from datetime import timezone
 
 import requests
-import schedule
-import typer
-from dotenv import load_dotenv
+from apscheduler.schedulers.background import BackgroundScheduler
 
 from src.config import FLASK_PORT
 from src.telemetry import metrics
-
-load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -35,13 +31,12 @@ _USAGE_RE = re.compile(
 _WINDOW_MAP = {"session": "five_hour", "week (all models)": "seven_day"}
 _SUBSCRIPTION_ONLY_MARKER = "You are currently using your subscription to power your Claude Code usage"
 
-_DEFAULT_SERVER = f"http://localhost:{FLASK_PORT}"
+_SERVER = f"http://localhost:{FLASK_PORT}"
 SOURCE = socket.gethostname()
 
 _QUOTA_POLL_INTERVAL_MINUTES = 2
-now = datetime.now()
-_FIRST_DAILY_PING_TIME = now.replace(hour=5, minute=30)
-_SECOND_DAILY_PING_TIME = _FIRST_DAILY_PING_TIME + timedelta(hours=5, minutes=1)
+_FIRST_DAILY_PING_TIME = (5, 30)
+_SECOND_DAILY_PING_TIME = (10, 31)  # first ping + 5h01m, so it lands in the next quota window
 _TIMEOUT_SECONDS = 60
 
 
@@ -64,16 +59,6 @@ def _is_subscription_only_output(output: str) -> bool:
     return len(lines) == 1 and lines[0] == _SUBSCRIPTION_ONLY_MARKER
 
 
-def _resolve_server(server: str, prod: bool) -> str:
-    if prod:
-        prod_url = os.environ.get("PROD_URL")
-        if not prod_url:
-            typer.secho("Error: PROD_URL not set in .env", fg=typer.colors.RED, err=True)
-            raise typer.Exit(1)
-        return prod_url
-    return server
-
-
 def _log_claude_failure(task: str, result: subprocess.CompletedProcess[str]) -> None:
     logger.error(
         "%s: claude exited %d\nstdout: %s\nstderr: %s",
@@ -84,7 +69,7 @@ def _log_claude_failure(task: str, result: subprocess.CompletedProcess[str]) -> 
     )
 
 
-def poll_quota(server: str) -> None:
+def poll_quota() -> None:
     with metrics.timed("duration"):
         result = subprocess.run(
             ["claude", "--permission-mode", "bypassPermissions", "-p", "/usage"],
@@ -130,13 +115,13 @@ def poll_quota(server: str) -> None:
         metrics.increment("no_quota_lines_matched")
         return
 
-    resp = requests.post(f"{server.rstrip('/')}/api/quota_snapshots", json=records, timeout=10)
+    resp = requests.post(f"{_SERVER}/api/quota_snapshots", json=records, timeout=10)
     resp.raise_for_status()
     logger.debug("quota_poll: %s", resp.json())
     metrics.increment("success")
 
 
-def daily_ping(prod: bool = False) -> None:
+def daily_ping() -> None:
     ping = subprocess.run(
         [
             "claude",
@@ -159,12 +144,8 @@ def daily_ping(prod: bool = False) -> None:
         metrics.increment("ping_success")
 
     uv_bin = shutil.which("uv") or "/home/mnalavadi/.local/bin/uv"
-    backfill_cmd = [uv_bin, "run", "backfill"]
-    if prod:
-        backfill_cmd.append("--prod")
-
     backfill = subprocess.run(
-        backfill_cmd,
+        [uv_bin, "run", "backfill"],
         capture_output=True,
         text=True,
         timeout=_TIMEOUT_SECONDS,
@@ -181,29 +162,14 @@ def daily_ping(prod: bool = False) -> None:
         metrics.increment("backfill_success")
 
 
-def scheduler_cli(
-    server: str = typer.Option(_DEFAULT_SERVER, "--server", help="Sync server base URL"),
-    prod: bool = typer.Option(False, "--prod", help="Target production server (PROD_URL from .env)"),
-) -> None:
-    """Periodic task runner for quota polling and daily pings."""
-    server = _resolve_server(server, prod)
-    typer.secho(f"Target server: {server}", fg=typer.colors.MAGENTA, bold=True)
-    logger.info("scheduler starting (source=%s, server=%s)", SOURCE, server)
-
-    schedule.every(_QUOTA_POLL_INTERVAL_MINUTES).minutes.do(poll_quota, server)
-    schedule.every().day.at(_FIRST_DAILY_PING_TIME.strftime("%H:%M")).do(daily_ping, prod)
-    schedule.every().day.at(_SECOND_DAILY_PING_TIME.strftime("%H:%M")).do(daily_ping, prod)
-
-    poll_quota(server)
-
-    while True:
-        schedule.run_pending()
-        time.sleep(10)
-
-
-def main() -> None:
-    typer.run(scheduler_cli)
-
-
-if __name__ == "__main__":
-    main()
+def start() -> BackgroundScheduler:
+    """Schedule quota polling + daily pings and start running them in the background."""
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(
+        poll_quota, "interval", minutes=_QUOTA_POLL_INTERVAL_MINUTES, next_run_time=datetime.now()
+    )
+    scheduler.add_job(daily_ping, "cron", hour=_FIRST_DAILY_PING_TIME[0], minute=_FIRST_DAILY_PING_TIME[1])
+    scheduler.add_job(daily_ping, "cron", hour=_SECOND_DAILY_PING_TIME[0], minute=_SECOND_DAILY_PING_TIME[1])
+    scheduler.start()
+    logger.info("scheduler started (source=%s, server=%s)", SOURCE, _SERVER)
+    return scheduler
