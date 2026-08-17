@@ -27,7 +27,7 @@ under `[tool.config]` and is read by `src/config.py`.
 [tool.config]
 flask_port = 5014          # port the API listens on
 flask_host = "0.0.0.0"     # bind address
-db_path = "claude-usage.db"  # SQLite file, relative to the working directory
+db_path = "data/claude-usage.db"  # SQLite file, relative to the working directory
 spyglass_host = "localhost:5013"  # where this service's own metrics/logs are shipped
 spyglass_dashboard_url = "https://spyglass.mnalavadi.org/dashboard/claude-usage-notch-server"
 ```

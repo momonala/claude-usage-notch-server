@@ -2,7 +2,7 @@
 
 REMOTE_URL="mnalavadi@192.168.2.107"
 PROJECT_NAME=$(basename "$(pwd)")
-DB_NAME="claude-usage.db"
+DB_NAME="data/claude-usage.db"
 
 REMOTE_PATH="${REMOTE_URL}:/home/mnalavadi/${PROJECT_NAME}/${DB_NAME}"
 LOCAL_PATH="${DB_NAME}"

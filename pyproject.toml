@@ -39,7 +39,7 @@ dev = [
 [tool.config]
 flask_port = 5014
 flask_host = "0.0.0.0"
-db_path = "claude-usage.db"
+db_path = "data/claude-usage.db"
 spyglass_host = "localhost:5013"
 spyglass_dashboard_url = "https://spyglass.mnalavadi.org/dashboard/claude-usage-notch-server"
 
