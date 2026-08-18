@@ -16,6 +16,7 @@ from src.scheduler import start as start_scheduler
 from src.telemetry import logger as _telemetry_logger  # noqa: F401  (wires stdout + Spyglass logging)
 
 logging.getLogger("werkzeug").setLevel(logging.WARNING)
+logging.getLogger("apscheduler").setLevel(logging.WARNING)
 
 
 def create_app() -> Flask:
