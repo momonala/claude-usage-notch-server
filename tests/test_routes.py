@@ -235,6 +235,7 @@ def test_analytics_returns_expected_shape_on_empty_db(client):
     # No client has pushed a quota reading yet — empty, not absent.
     assert body["session_quota_history"] == []
     assert body["weekly_quota_history"] == []
+    assert body["credit_quota_history"] == []
 
 
 def test_analytics_includes_real_quota_history_within_window(client):
@@ -244,6 +245,7 @@ def test_analytics_includes_real_quota_history_within_window(client):
             _quota("session", "2026-06-11T08:00:00.000Z", percent_used=0.5),  # inside session window
             _quota("session", "2026-06-01T00:00:00.000Z", percent_used=0.9),  # outside session window
             _quota("weekly", "2026-06-06T00:00:00.000Z", percent_used=0.3),  # inside weekly window
+            _quota("monthly", "2026-06-01T00:00:00.000Z", percent_used=0.01),  # inside month window
         ],
     )
     body = client.get(f"/api/analytics?{_ANALYTICS_PARAMS}").get_json()
@@ -259,6 +261,13 @@ def test_analytics_includes_real_quota_history_within_window(client):
         {
             "timestamp": "2026-06-06T00:00:00.000Z",
             "percent_used": 0.3,
+            "resets_at": "2026-06-16T17:00:00.000Z",
+        }
+    ]
+    assert body["credit_quota_history"] == [
+        {
+            "timestamp": "2026-06-01T00:00:00.000Z",
+            "percent_used": 0.01,
             "resets_at": "2026-06-16T17:00:00.000Z",
         }
     ]

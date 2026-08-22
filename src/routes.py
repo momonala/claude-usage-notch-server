@@ -232,6 +232,11 @@ def get_analytics():
                 .where(QuotaSnapshot.window_type == "weekly", QuotaSnapshot.timestamp >= weekly_cutoff)
                 .order_by(QuotaSnapshot.timestamp)
             ).all()
+            month_quota_records = db.scalars(
+                select(QuotaSnapshot)
+                .where(QuotaSnapshot.window_type == "monthly", QuotaSnapshot.timestamp >= month_cutoff)
+                .order_by(QuotaSnapshot.timestamp)
+            ).all()
 
         # Records are sorted by timestamp; bisect avoids multiple O(n) linear scans.
         timestamps = [r.timestamp for r in windowed]
@@ -254,6 +259,7 @@ def get_analytics():
             session_cost_records,
             session_quota_records,
             weekly_quota_records,
+            month_quota_records,
         )
 
     logger.info(
