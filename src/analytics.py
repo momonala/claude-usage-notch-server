@@ -205,14 +205,60 @@ def _make_buckets(
 # ---------------------------------------------------------------------------
 
 
+# The provider recomputes `resets_at` relative to poll time, so consecutive polls
+# of the *same* reset report timestamps that differ by milliseconds. Snapping to the
+# nearest minute collapses that jitter, which matters twice over: it lets the
+# run-length filter below recognise unchanged readings, and it stops the client's
+# `extractResetTimes` (a Set of raw values) from seeing thousands of "distinct"
+# resets where only a handful occurred.
+_RESET_QUANTUM_SECONDS = 60
+
+
+def _quantize_reset(value: datetime) -> datetime:
+    # Values read back from SQLite are naive-but-UTC; `.timestamp()` would read a
+    # naive datetime as *local* time and shift every reset by the host's UTC offset.
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    epoch = value.timestamp()
+    snapped = round(epoch / _RESET_QUANTUM_SECONDS) * _RESET_QUANTUM_SECONDS
+    return datetime.fromtimestamp(snapped, tz=timezone.utc)
+
+
 def _quota_history(records: list[QuotaSnapshot]) -> list[dict]:
-    """Real polled quota readings as [{timestamp, percent_used, resets_at?}], oldest first."""
-    result = []
-    for q in records:
+    """Real polled quota readings as [{timestamp, percent_used, resets_at?}], oldest first.
+
+    The client renders these as a step function, holding each reading forward until
+    the next one, so a run of identical readings is indistinguishable from its first
+    element alone. We emit only the points where `percent_used` or the quantized
+    `resets_at` actually changes, plus the final reading (which anchors the right-hand
+    end of the step and carries the upcoming reset for `nextResetTime`).
+
+    This is lossless for the step-function rendering — every visible transition and
+    every reset boundary survives — but it cuts a typical week-long series by roughly
+    5x, since the poller samples far faster than the quota moves.
+    """
+    result: list[dict] = []
+    previous_signature: tuple | None = None
+
+    for index, q in enumerate(records):
+        reset = _quantize_reset(q.resets_at) if q.resets_at else None
+        signature = (q.percent_used, reset)
+        is_last = index == len(records) - 1
+
+        if signature == previous_signature and not is_last:
+            continue
+
         entry: dict = {"timestamp": format_timestamp(q.timestamp), "percent_used": q.percent_used}
-        if q.resets_at:
-            entry["resets_at"] = format_timestamp(q.resets_at)
+        if reset:
+            entry["resets_at"] = format_timestamp(reset)
+
+        # The final reading is appended even when it repeats the current run: it
+        # carries the same value at a later timestamp, which is what anchors the
+        # right-hand end of the step. Overwriting the run's first point instead
+        # would drag the step's start forward and erase the plateau before it.
         result.append(entry)
+        previous_signature = signature
+
     return result
 
 

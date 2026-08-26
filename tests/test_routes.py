@@ -273,6 +273,73 @@ def test_analytics_includes_real_quota_history_within_window(client):
     ]
 
 
+def test_analytics_quota_history_collapses_unchanged_readings(client):
+    # The poller samples far faster than the quota moves. A run of identical
+    # readings renders identically to its first point (the client holds each value
+    # forward), so only transitions plus the final anchor should cross the wire.
+    client.post(
+        "/api/quota_snapshots",
+        json=[
+            _quota("session", "2026-06-11T08:00:00.000Z", percent_used=0.5),
+            _quota("session", "2026-06-11T08:01:00.000Z", percent_used=0.5),
+            _quota("session", "2026-06-11T08:02:00.000Z", percent_used=0.5),
+            _quota("session", "2026-06-11T08:03:00.000Z", percent_used=0.7),
+            _quota("session", "2026-06-11T08:04:00.000Z", percent_used=0.7),
+        ],
+    )
+    history = client.get(f"/api/analytics?{_ANALYTICS_PARAMS}").get_json()["session_quota_history"]
+
+    # 0.5 keeps its run-START timestamp (the step begins there, not where it ends),
+    # 0.7 is the transition, and 08:04 is the final anchor holding the step to the edge.
+    assert [(p["timestamp"], p["percent_used"]) for p in history] == [
+        ("2026-06-11T08:00:00.000Z", 0.5),
+        ("2026-06-11T08:03:00.000Z", 0.7),
+        ("2026-06-11T08:04:00.000Z", 0.7),
+    ]
+
+
+def test_analytics_quota_history_preserves_reset_drops(client):
+    # A reset is a genuine discontinuity: high -> low with a new resets_at. Both
+    # sides of the drop must survive so the sawtooth stays visible.
+    client.post(
+        "/api/quota_snapshots",
+        json=[
+            _quota("session", "2026-06-11T08:00:00.000Z", percent_used=0.98),
+            _quota("session", "2026-06-11T08:01:00.000Z", percent_used=0.98),
+            _quota(
+                "session", "2026-06-11T08:02:00.000Z", percent_used=0.03, resets_at="2026-06-16T22:00:00.000Z"
+            ),
+        ],
+    )
+    history = client.get(f"/api/analytics?{_ANALYTICS_PARAMS}").get_json()["session_quota_history"]
+
+    assert [p["percent_used"] for p in history] == [0.98, 0.03]
+    assert history[0]["resets_at"] == "2026-06-16T17:00:00.000Z"
+    assert history[1]["resets_at"] == "2026-06-16T22:00:00.000Z"
+
+
+def test_analytics_quota_history_quantizes_reset_jitter(client):
+    # The provider derives resets_at from poll time, so the same reset arrives with
+    # millisecond-level drift on every poll. Those must collapse to ONE reset value,
+    # or the client's extractResetTimes (a Set) draws a marker per poll.
+    client.post(
+        "/api/quota_snapshots",
+        json=[
+            _quota(
+                "session",
+                f"2026-06-11T08:0{i}:00.000Z",
+                percent_used=0.5,
+                resets_at=f"2026-06-16T17:00:00.{i:03d}Z",
+            )
+            for i in range(5)
+        ],
+    )
+    history = client.get(f"/api/analytics?{_ANALYTICS_PARAMS}").get_json()["session_quota_history"]
+
+    assert len({p["resets_at"] for p in history}) == 1
+    assert history[0]["resets_at"] == "2026-06-16T17:00:00.000Z"
+
+
 def test_analytics_aggregates_costs_correctly(client):
     # Two records: one in session window, one older (weekly only).
     client.post(
