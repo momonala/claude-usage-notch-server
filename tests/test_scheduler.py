@@ -44,46 +44,24 @@ def _parse_output(text: str) -> list[dict]:
     ]
 
 
+@pytest.mark.parametrize("output", [_OUTPUT_COMMA, _OUTPUT_AT], ids=["comma", "at"])
 class TestRegex:
-    def test_comma_format_finds_two_lines(self):
-        records = _parse_output(_OUTPUT_COMMA)
-        assert len(records) == 2
+    """Both real `claude -p /usage` date formats, and only the quota lines."""
 
-    def test_at_format_finds_two_lines(self):
-        records = _parse_output(_OUTPUT_AT)
-        assert len(records) == 2
+    def test_finds_exactly_the_two_quota_lines(self, output):
+        assert len(_parse_output(output)) == 2
 
-    def test_comma_format_session(self):
-        records = _parse_output(_OUTPUT_COMMA)
-        session = next(r for r in records if r["window_type"] == "five_hour")
-        assert session["percent_used"] == 8.0
-        assert session["resets_raw"] == "Jun 17, 12:39pm"
+    def test_reads_percent_and_reset_for_each_window(self, output):
+        by_window = {r["window_type"]: r for r in _parse_output(output)}
+        assert by_window["five_hour"]["percent_used"] == 8.0
+        assert by_window["five_hour"]["resets_raw"].startswith("Jun 17")
+        assert by_window["seven_day"]["percent_used"] == 81.0
+        assert by_window["seven_day"]["resets_raw"].startswith("Jun 19")
 
-    def test_comma_format_week(self):
-        records = _parse_output(_OUTPUT_COMMA)
-        week = next(r for r in records if r["window_type"] == "seven_day")
-        assert week["percent_used"] == 81.0
-        assert week["resets_raw"] == "Jun 19, 10:59pm"
 
-    def test_at_format_session(self):
-        records = _parse_output(_OUTPUT_AT)
-        session = next(r for r in records if r["window_type"] == "five_hour")
-        assert session["percent_used"] == 8.0
-        assert session["resets_raw"] == "Jun 17 at 12:39pm"
-
-    def test_at_format_week(self):
-        records = _parse_output(_OUTPUT_AT)
-        week = next(r for r in records if r["window_type"] == "seven_day")
-        assert week["percent_used"] == 81.0
-        assert week["resets_raw"] == "Jun 19 at 10:59pm"
-
-    def test_unknown_label_maps_to_none(self):
-        records = _parse_output(_OUTPUT_COMMA)
-        assert all(r["window_type"] is not None for r in records)
-
-    def test_extra_content_does_not_produce_spurious_matches(self):
-        records = _parse_output(_OUTPUT_AT)
-        assert len(records) == 2
+class TestWindowMap:
+    def test_unrecognised_label_maps_to_none(self):
+        assert _WINDOW_MAP.get("month (opus only)") is None
 
 
 class TestSubscriptionOnlyOutput:

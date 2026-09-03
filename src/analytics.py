@@ -1,12 +1,12 @@
-"""Analytics aggregation — all chart computation that previously ran in Swift.
+"""Chart aggregation for the /api/analytics route.
 
-Called by the /api/analytics route; kept separate so it can be unit-tested
-without HTTP overhead.
+Kept separate from the route so it can be unit-tested without HTTP overhead.
 """
 
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -15,10 +15,7 @@ from src.models import QuotaSnapshot
 from src.models import UsageRecord
 from src.models import format_timestamp
 
-# ---------------------------------------------------------------------------
-# Model pricing (mirrors Swift's ModelPricing)
-# ---------------------------------------------------------------------------
-
+# USD per million tokens, (input, output) per model family.
 _MODEL_RATES: dict[str, tuple[float, float]] = {
     "fable": (10.0, 50.0),
     "mythos": (10.0, 50.0),
@@ -61,11 +58,6 @@ def estimated_cost(r: UsageRecord) -> float:
     return estimated_cost_fields(
         r.model, r.input_tokens, r.cache_creation_tokens, r.output_tokens, r.cache_read_tokens
     )
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _total_tokens(r: UsageRecord) -> int:
@@ -200,17 +192,12 @@ def _make_buckets(
     ]
 
 
-# ---------------------------------------------------------------------------
-# Main aggregation
-# ---------------------------------------------------------------------------
-
-
 # The provider recomputes `resets_at` relative to poll time, so consecutive polls
 # of the *same* reset report timestamps that differ by milliseconds. Snapping to the
 # nearest minute collapses that jitter, which matters twice over: it lets the
 # run-length filter below recognise unchanged readings, and it stops the client's
-# `extractResetTimes` (a Set of raw values) from seeing thousands of "distinct"
-# resets where only a handful occurred.
+# `pastResets` (a Set of raw values) from seeing thousands of "distinct" resets
+# where only a handful occurred.
 _RESET_QUANTUM_SECONDS = 60
 
 
@@ -231,7 +218,7 @@ def _quota_history(records: list[QuotaSnapshot]) -> list[dict]:
     the next one, so a run of identical readings is indistinguishable from its first
     element alone. We emit only the points where `percent_used` or the quantized
     `resets_at` actually changes, plus the final reading (which anchors the right-hand
-    end of the step and carries the upcoming reset for `nextResetTime`).
+    end of the step and carries the upcoming reset for the client's `nextReset`).
 
     This is lossless for the step-function rendering — every visible transition and
     every reset boundary survives — but it cuts a typical week-long series by roughly
@@ -262,31 +249,46 @@ def _quota_history(records: list[QuotaSnapshot]) -> list[dict]:
     return result
 
 
-def compute_analytics(
-    session_records: list[UsageRecord],
-    weekly_records: list[UsageRecord],
-    month_records: list[UsageRecord],
-    lookback_records: list[UsageRecord],
-    lifetime_cost: float,
-    session_cutoff: datetime,
-    weekly_cutoff: datetime,
-    lookback_cutoff: datetime,
-    granularity: str,
-    session_cost_records: list[UsageRecord],
-    session_quota_records: list[QuotaSnapshot] | None = None,
-    weekly_quota_records: list[QuotaSnapshot] | None = None,
-    month_quota_records: list[QuotaSnapshot] | None = None,
-) -> dict:
+@dataclass(frozen=True)
+class AnalyticsRequest:
+    """Everything one /api/analytics call aggregates over.
+
+    The route slices the fetched history per window and passes it here as one
+    value rather than a dozen positional arguments.
+    """
+
+    granularity: str
+    lifetime_cost: float
+
+    # Record slices, each already narrowed to its own window.
+    session_records: list[UsageRecord]
+    session_cost_records: list[UsageRecord]
+    weekly_records: list[UsageRecord]
+    month_records: list[UsageRecord]
+    lookback_records: list[UsageRecord]
+
+    # Naive-UTC cutoffs the bucket grids are laid out from.
+    session_cutoff: datetime
+    weekly_cutoff: datetime
+    lookback_cutoff: datetime
+
+    # Real polled quota readings, empty until a client has been pushing them.
+    session_quota: list[QuotaSnapshot]
+    weekly_quota: list[QuotaSnapshot]
+    month_quota: list[QuotaSnapshot]
+
+
+def compute_analytics(req: AnalyticsRequest) -> dict:
     now = datetime.now(timezone.utc)
 
     # `session_records` spans a wide 24h window so the session_buckets chart can
-    # show the 5h rolling window resetting multiple times. The "Session" cost
-    # figure must instead reflect only the *current* session — narrower and
-    # passed separately as `session_cost_records` — otherwise it double-counts
-    # spend from outside the actual rolling window (and can exceed "Today").
-    session_cost = sum(estimated_cost(r) for r in session_cost_records)
-    weekly_cost = sum(estimated_cost(r) for r in weekly_records)
-    month_cost = sum(estimated_cost(r) for r in month_records)
+    # show the 5h rolling window resetting several times. The "Session" cost
+    # figure must reflect only the *current* session — hence the separate,
+    # narrower `session_cost_records` — otherwise it double-counts spend from
+    # outside the rolling window and can exceed "Today".
+    session_cost = sum(estimated_cost(r) for r in req.session_cost_records)
+    weekly_cost = sum(estimated_cost(r) for r in req.weekly_records)
+    month_cost = sum(estimated_cost(r) for r in req.month_records)
 
     # Token breakdowns, cache, model/project/skill mix, and web counts are all
     # labeled with the selected lookback period in the UI, so they aggregate over
@@ -297,7 +299,7 @@ def compute_analytics(
     project_tokens: dict[str, int] = defaultdict(int)
     skill_tokens: dict[str, int] = defaultdict(int)
 
-    for r in lookback_records:
+    for r in req.lookback_records:
         total_input += r.input_tokens
         total_output += r.output_tokens
         total_cache_create += r.cache_creation_tokens
@@ -316,7 +318,7 @@ def compute_analytics(
     # Rough blended $/Mtok over the lookback window (total cost spread across
     # cacheable tokens). Only used to estimate cache savings below — not a precise
     # per-token input rate, hence "blended".
-    lookback_costs = [estimated_cost(r) for r in lookback_records]
+    lookback_costs = [estimated_cost(r) for r in req.lookback_records]
     lookback_cost = sum(lookback_costs)
     blended_rate = (lookback_cost / cacheable_denom * 1_000_000) if cacheable_denom > 0 else 3.0
     cache_savings = total_cache_read * blended_rate * 0.9 / 1_000_000
@@ -326,19 +328,21 @@ def compute_analytics(
     # Spend/sessions series; bucket width follows the lookback granularity
     # (hourly for 1D, daily for 7D/30D, monthly for All).
     daily_cost, daily_sessions = _build_series(
-        lookback_records, lookback_costs, granularity, lookback_cutoff, now
+        req.lookback_records, lookback_costs, req.granularity, req.lookback_cutoff, now
     )
 
     # "Today" is a calendar-day figure independent of the series granularity.
     today = now.date()
-    today_cost = sum(cost for r, cost in zip(lookback_records, lookback_costs) if r.timestamp.date() == today)
+    today_cost = sum(
+        cost for r, cost in zip(req.lookback_records, lookback_costs) if r.timestamp.date() == today
+    )
 
     return {
         "session_cost": session_cost,
         "today_cost": today_cost,
         "weekly_cost": weekly_cost,
         "month_cost": month_cost,
-        "lifetime_cost": lifetime_cost,
+        "lifetime_cost": req.lifetime_cost,
         "cache_hit_rate": cache_hit_rate,
         "cache_savings_usd": cache_savings,
         "token_types": {
@@ -356,14 +360,14 @@ def compute_analytics(
         "skill_breakdown": _to_ranked(skill_tokens, top=5),
         "daily_cost": daily_cost,
         "daily_sessions": daily_sessions,
-        "session_quota_history": _quota_history(session_quota_records or []),
-        "weekly_quota_history": _quota_history(weekly_quota_records or []),
-        "credit_quota_history": _quota_history(month_quota_records or []),
-        "hourly_activity": _build_hourly_activity(lookback_records, lookback_cutoff, now),
+        "session_quota_history": _quota_history(req.session_quota),
+        "weekly_quota_history": _quota_history(req.weekly_quota),
+        "credit_quota_history": _quota_history(req.month_quota),
+        "hourly_activity": _build_hourly_activity(req.lookback_records, req.lookback_cutoff, now),
         "total_web_searches": total_web_searches,
         "total_web_fetches": total_web_fetches,
         # 24h of minute buckets: the session window is 5h, but the app charts the
         # last 24h so the window can be seen resetting several times across the span.
-        "session_buckets": _make_buckets(session_records, session_cutoff, "minute", 24 * 60),
-        "weekly_buckets": _make_buckets(weekly_records, weekly_cutoff, "hour", 7 * 24),
+        "session_buckets": _make_buckets(req.session_records, req.session_cutoff, "minute", 24 * 60),
+        "weekly_buckets": _make_buckets(req.weekly_records, req.weekly_cutoff, "hour", 7 * 24),
     }

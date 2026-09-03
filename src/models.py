@@ -1,8 +1,9 @@
-"""SQLAlchemy model for a single Claude Code usage record.
+"""SQLAlchemy models for the stored usage history.
 
-One row per `assistant`-type JSONL line from ~/.claude/projects/**/*.jsonl. The
-notch app extracts these and POSTs them here; the chart view reads them back.
-The server aggregates records on demand via /api/analytics.
+`usage_records` is one row per `assistant`-type JSONL line from
+~/.claude/projects/**/*.jsonl; `quota_snapshots` is one row per polled quota
+reading. The notch app POSTs both and reads aggregates back from
+/api/analytics.
 """
 
 from datetime import datetime

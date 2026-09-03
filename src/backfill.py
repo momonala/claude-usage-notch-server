@@ -9,11 +9,9 @@ carry it, so that table only has data from whenever a client started polling and
 pushing it; it can't be backfilled retroactively.
 
 Usage:
-    uv run python backfill.py
-    uv run python backfill.py --prod
-    uv run python backfill.py --server http://localhost:FLASK_PORT
-
-Reads PROD_URL from a .env file in the same directory as this script (optional).
+    uv run backfill
+    uv run backfill --prod                 # PROD_URL from .env
+    uv run backfill --server http://host:5014
 """
 
 import json
@@ -37,10 +35,6 @@ _LOCAL_URL = f"http://localhost:{FLASK_PORT}"
 _JSON_HEADERS = {"Content-Type": "application/json"}
 _WORKERS = 4
 _BATCH_SIZE = 1000
-
-
-def find_jsonl_files(root: Path) -> list[Path]:
-    return list(root.rglob("*.jsonl"))
 
 
 def parse_assistant_line(raw: str) -> dict | None:
@@ -95,7 +89,7 @@ def parse_assistant_line(raw: str) -> dict | None:
 
 
 def load_all_records(claude_dir: Path) -> list[dict]:
-    files = find_jsonl_files(claude_dir)
+    files = list(claude_dir.rglob("*.jsonl"))
     typer.secho(f"Found {len(files)} JSONL files under {claude_dir}", fg=typer.colors.CYAN)
 
     seen: set[str] = set()

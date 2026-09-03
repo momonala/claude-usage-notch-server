@@ -1,8 +1,8 @@
 """SQLAlchemy engine and session setup.
 
-SQLite store at `DB_PATH` (see src.env). Schema is created on demand via
-`init_db()` — the model is a single table with no migration history to worry
-about, so `create_all` is sufficient.
+SQLite store at `DB_PATH` (see `src.config`). Schema is created on demand by
+`init_db()` — there's no migration history to worry about, so `create_all` is
+sufficient.
 """
 
 from collections.abc import Iterator

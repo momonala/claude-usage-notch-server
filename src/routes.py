@@ -21,6 +21,7 @@ from flask import request
 from sqlalchemy import select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
+from src.analytics import AnalyticsRequest
 from src.analytics import compute_analytics
 from src.analytics import estimated_cost_fields
 from src.database import session_scope
@@ -35,6 +36,28 @@ logger = logging.getLogger(__name__)
 bp = Blueprint("api", __name__)
 
 
+def _filter_since(stmt, column, since_raw: str | None):
+    """Narrow `stmt` to rows at or after `since_raw`. Raises ValueError if unparseable."""
+    if not since_raw:
+        return stmt
+    return stmt.where(column >= parse_timestamp(since_raw))
+
+
+def _json_array(endpoint: str):
+    """The POST body as a list, or None if it isn't a JSON array."""
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, list):
+        logger.warning("%s: rejected non-array body (type=%s)", endpoint, type(payload).__name__)
+        return None
+    return payload
+
+
+def _insert_counts(result, submitted: int) -> dict:
+    """SQLite reports rows actually inserted, so skipped rows are the remainder."""
+    inserted = result.rowcount if result.rowcount >= 0 else submitted
+    return {"inserted": inserted, "skipped": submitted - inserted}
+
+
 @bp.get("/status")
 def health():
     return jsonify({"status": "ok"})
@@ -42,9 +65,8 @@ def health():
 
 @bp.post("/api/records")
 def post_records():
-    payload = request.get_json(silent=True)
-    if not isinstance(payload, list):
-        logger.warning("POST /api/records: rejected non-array body (type=%s)", type(payload).__name__)
+    payload = _json_array("POST /api/records")
+    if payload is None:
         return jsonify({"error": "expected a JSON array of records"}), 400
 
     logger.debug("POST /api/records: received batch of %d", len(payload))
@@ -86,23 +108,21 @@ def post_records():
                 stats.lifetime_cost += cost_delta
                 stats.last_updated = datetime.now(timezone.utc)
 
-    # SQLite sets rowcount to actual rows inserted (skipped rows don't count).
-    inserted = result.rowcount if result.rowcount >= 0 else len(uuids)
-    skipped = len(uuids) - inserted
-    logger.info("POST /api/records: inserted=%d skipped=%d", inserted, skipped)
-    metrics.increment("records_inserted", inserted)
-    return jsonify({"inserted": inserted, "skipped": skipped})
+    counts = _insert_counts(result, len(uuids))
+    logger.info("POST /api/records: inserted=%d skipped=%d", counts["inserted"], counts["skipped"])
+    metrics.increment("records_inserted", counts["inserted"])
+    return jsonify(counts)
 
 
 @bp.get("/api/records")
 def get_records():
     since_raw = request.args.get("since")
-    stmt = select(UsageRecord).order_by(UsageRecord.timestamp)
-    if since_raw:
-        try:
-            stmt = stmt.where(UsageRecord.timestamp >= parse_timestamp(since_raw))
-        except ValueError:
-            return jsonify({"error": f"invalid 'since' timestamp: {since_raw}"}), 400
+    try:
+        stmt = _filter_since(
+            select(UsageRecord).order_by(UsageRecord.timestamp), UsageRecord.timestamp, since_raw
+        )
+    except ValueError:
+        return jsonify({"error": f"invalid 'since' timestamp: {since_raw}"}), 400
 
     with session_scope() as session:
         records = session.scalars(stmt).all()
@@ -112,9 +132,8 @@ def get_records():
 
 @bp.post("/api/quota_snapshots")
 def post_quota_snapshots():
-    payload = request.get_json(silent=True)
-    if not isinstance(payload, list):
-        logger.warning("POST /api/quota_snapshots: rejected non-array body (type=%s)", type(payload).__name__)
+    payload = _json_array("POST /api/quota_snapshots")
+    if payload is None:
         return jsonify({"error": "expected a JSON array of records"}), 400
 
     # Keyed by (window_type, timestamp) — the table's natural composite key — so a
@@ -141,11 +160,10 @@ def post_quota_snapshots():
         )
         result = session.connection().execute(stmt, list(rows.values()))
 
-    inserted = result.rowcount if result.rowcount >= 0 else len(rows)
-    skipped = len(rows) - inserted
-    logger.debug("POST /api/quota_snapshots: inserted=%d skipped=%d", inserted, skipped)
-    metrics.increment("quota_snapshots_inserted", inserted)
-    return jsonify({"inserted": inserted, "skipped": skipped})
+    counts = _insert_counts(result, len(rows))
+    logger.debug("POST /api/quota_snapshots: inserted=%d skipped=%d", counts["inserted"], counts["skipped"])
+    metrics.increment("quota_snapshots_inserted", counts["inserted"])
+    return jsonify(counts)
 
 
 @bp.get("/api/quota_snapshots")
@@ -155,11 +173,10 @@ def get_quota_snapshots():
     stmt = select(QuotaSnapshot).order_by(QuotaSnapshot.timestamp)
     if window_type:
         stmt = stmt.where(QuotaSnapshot.window_type == window_type)
-    if since_raw:
-        try:
-            stmt = stmt.where(QuotaSnapshot.timestamp >= parse_timestamp(since_raw))
-        except ValueError:
-            return jsonify({"error": f"invalid 'since' timestamp: {since_raw}"}), 400
+    try:
+        stmt = _filter_since(stmt, QuotaSnapshot.timestamp, since_raw)
+    except ValueError:
+        return jsonify({"error": f"invalid 'since' timestamp: {since_raw}"}), 400
 
     with session_scope() as session:
         records = session.scalars(stmt).all()
@@ -219,55 +236,52 @@ def get_analytics():
             stats = db.get(UsageStats, 1)
             lifetime_cost = stats.lifetime_cost if stats is not None else 0.0
 
-            # Real polled quota readings (ground truth) for the same spans as the
-            # session/weekly token buckets below. Empty until a client has pushed at
-            # least one reading — the app falls back to its token-based estimate then.
-            session_quota_records = db.scalars(
-                select(QuotaSnapshot)
-                .where(QuotaSnapshot.window_type == "session", QuotaSnapshot.timestamp >= session_cutoff)
-                .order_by(QuotaSnapshot.timestamp)
-            ).all()
-            weekly_quota_records = db.scalars(
-                select(QuotaSnapshot)
-                .where(QuotaSnapshot.window_type == "weekly", QuotaSnapshot.timestamp >= weekly_cutoff)
-                .order_by(QuotaSnapshot.timestamp)
-            ).all()
-            month_quota_records = db.scalars(
-                select(QuotaSnapshot)
-                .where(QuotaSnapshot.window_type == "monthly", QuotaSnapshot.timestamp >= month_cutoff)
-                .order_by(QuotaSnapshot.timestamp)
-            ).all()
+            # Real polled quota readings (ground truth) over the same spans as
+            # the session/weekly token buckets. Empty until a client has pushed
+            # at least one reading — the app estimates from tokens until then.
+            def quota_since(window_type: str, cutoff: datetime) -> list[QuotaSnapshot]:
+                return list(
+                    db.scalars(
+                        select(QuotaSnapshot)
+                        .where(QuotaSnapshot.window_type == window_type, QuotaSnapshot.timestamp >= cutoff)
+                        .order_by(QuotaSnapshot.timestamp)
+                    ).all()
+                )
 
-        # Records are sorted by timestamp; bisect avoids multiple O(n) linear scans.
+            session_quota = quota_since("session", session_cutoff)
+            weekly_quota = quota_since("weekly", weekly_cutoff)
+            month_quota = quota_since("monthly", month_cutoff)
+
+        # `windowed` is ordered by timestamp, so each window is a suffix of it;
+        # bisect finds the boundary without a linear scan per window.
         timestamps = [r.timestamp for r in windowed]
-        lookback_records = windowed[bisect.bisect_left(timestamps, lookback_cutoff) :]
-        month_records = windowed[bisect.bisect_left(timestamps, month_cutoff) :]
-        weekly_records = windowed[bisect.bisect_left(timestamps, weekly_cutoff) :]
-        session_records = windowed[bisect.bisect_left(timestamps, session_cutoff) :]
-        session_cost_records = windowed[bisect.bisect_left(timestamps, session_cost_cutoff) :]
 
-        result = compute_analytics(
-            session_records,
-            weekly_records,
-            month_records,
-            lookback_records,
-            lifetime_cost,
-            session_cutoff,
-            weekly_cutoff,
-            lookback_cutoff,
-            granularity,
-            session_cost_records,
-            session_quota_records,
-            weekly_quota_records,
-            month_quota_records,
+        def records_since(cutoff: datetime) -> list[UsageRecord]:
+            return list(windowed[bisect.bisect_left(timestamps, cutoff) :])
+
+        request_data = AnalyticsRequest(
+            granularity=granularity,
+            lifetime_cost=lifetime_cost,
+            session_records=records_since(session_cutoff),
+            session_cost_records=records_since(session_cost_cutoff),
+            weekly_records=records_since(weekly_cutoff),
+            month_records=records_since(month_cutoff),
+            lookback_records=records_since(lookback_cutoff),
+            session_cutoff=session_cutoff,
+            weekly_cutoff=weekly_cutoff,
+            lookback_cutoff=lookback_cutoff,
+            session_quota=session_quota,
+            weekly_quota=weekly_quota,
+            month_quota=month_quota,
         )
+        result = compute_analytics(request_data)
 
     logger.info(
         "GET /api/analytics: session=%d session_cost=%d weekly=%d month=%d lookback=%d records",
-        len(session_records),
-        len(session_cost_records),
-        len(weekly_records),
-        len(month_records),
-        len(lookback_records),
+        len(request_data.session_records),
+        len(request_data.session_cost_records),
+        len(request_data.weekly_records),
+        len(request_data.month_records),
+        len(request_data.lookback_records),
     )
     return jsonify(result)

@@ -124,7 +124,9 @@ Returns a JSON array ordered by `timestamp`. Omit `since` for everything.
 ### POST /api/quota_snapshots
 
 Body is a JSON **array** of polled quota readings — one per window the client just
-fetched from the provider (e.g. Claude's `five_hour` and `seven_day`). Upsert is
+fetched from the provider. `window_type` is the app's own window name
+(`session`, `weekly`, `weeklyModel`, `monthly`), which is what
+`GET /api/analytics` filters on. Upsert is
 `INSERT … ON CONFLICT(window_type, timestamp) DO NOTHING`, so re-posting (or two
 devices polling the same account a moment apart) is safe.
 
