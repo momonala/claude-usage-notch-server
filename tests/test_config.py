@@ -1,12 +1,4 @@
-"""
-Tests for the configuration module.
-
-These tests verify that:
-1. Individual config flags return correct values
-2. --all flag returns all configuration values
-3. Missing flag produces an error
-4. --help shows all options
-"""
+"""Tests for the config CLI that install scripts read values from."""
 
 import pytest
 import typer
@@ -34,7 +26,6 @@ runner = CliRunner()
     ],
 )
 def test_config_returns_single_value(flag: str, expected_output: str):
-    """Test that individual flags return their correct values."""
     result = runner.invoke(app, [flag])
 
     assert result.exit_code == 0
@@ -42,7 +33,6 @@ def test_config_returns_single_value(flag: str, expected_output: str):
 
 
 def test_config_all_returns_all_values():
-    """Test that --all flag returns all configuration values."""
     result = runner.invoke(app, ["--all"])
 
     assert result.exit_code == 0
@@ -53,7 +43,6 @@ def test_config_all_returns_all_values():
 
 
 def test_config_without_flag_fails():
-    """Test that calling config without any flag produces an error."""
     result = runner.invoke(app, [])
 
     assert result.exit_code == 1
