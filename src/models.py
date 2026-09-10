@@ -89,11 +89,16 @@ class QuotaSnapshot(Base):
             row["resets_at"] = parse_timestamp(row["resets_at"])
         return row
 
-    def to_json(self) -> dict:
-        result = {field: getattr(self, field) for field in self._CLIENT_FIELDS}
-        result["timestamp"] = format_timestamp(self.timestamp)
-        if self.resets_at:
-            result["resets_at"] = format_timestamp(self.resets_at)
+    @classmethod
+    def client_columns(cls) -> tuple:
+        return tuple(getattr(cls, field) for field in (*cls._CLIENT_FIELDS, "timestamp"))
+
+    @classmethod
+    def row_to_json(cls, row) -> dict:
+        result = {field: getattr(row, field) for field in cls._CLIENT_FIELDS}
+        result["timestamp"] = format_timestamp(row.timestamp)
+        if row.resets_at:
+            result["resets_at"] = format_timestamp(row.resets_at)
         return result
 
 
@@ -171,8 +176,13 @@ class UsageRecord(Base):
         row["timestamp"] = parse_timestamp(data["timestamp"])
         return row
 
-    def to_json(self) -> dict:
-        result = {field: getattr(self, field) for field in self._CLIENT_FIELDS}
-        result["uuid"] = self.uuid
-        result["timestamp"] = format_timestamp(self.timestamp)
+    @classmethod
+    def client_columns(cls) -> tuple:
+        return tuple(getattr(cls, field) for field in (*cls._CLIENT_FIELDS, "uuid", "timestamp"))
+
+    @classmethod
+    def row_to_json(cls, row) -> dict:
+        result = {field: getattr(row, field) for field in cls._CLIENT_FIELDS}
+        result["uuid"] = row.uuid
+        result["timestamp"] = format_timestamp(row.timestamp)
         return result

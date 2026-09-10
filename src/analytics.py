@@ -10,10 +10,53 @@ from collections import defaultdict
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from typing import Protocol
 
 from src.models import QuotaSnapshot
 from src.models import UsageRecord
 from src.models import format_timestamp
+
+# ---------------------------------------------------------------------------
+# Row contracts
+# ---------------------------------------------------------------------------
+
+# Aggregation reads only these scalars, so the route selects columns rather than ORM
+# entities. Entity hydration allocates ~25 Python objects per row; on a threaded server
+# that churn fragments the per-thread malloc arena and the freed space is never returned
+# to the OS, so the process floor climbs with every request.
+
+
+class UsageRow(Protocol):
+    timestamp: datetime
+    session_id: str
+    model: str
+    project: str
+    attribution_skill: str | None
+    input_tokens: int
+    output_tokens: int
+    cache_creation_tokens: int
+    cache_read_tokens: int
+    web_searches: int
+    web_fetches: int
+
+
+class QuotaRow(Protocol):
+    timestamp: datetime
+    percent_used: float
+    resets_at: datetime | None
+
+
+def _columns_for(model: type, row_contract: type) -> tuple:
+    """Model columns matching the fields `row_contract` declares, in declaration order.
+
+    Raises AttributeError if the contract names a field the model lacks, so a
+    contract and its query cannot drift apart silently.
+    """
+    return tuple(getattr(model, field) for field in row_contract.__annotations__)
+
+
+USAGE_ROW_COLUMNS = _columns_for(UsageRecord, UsageRow)
+QUOTA_ROW_COLUMNS = _columns_for(QuotaSnapshot, QuotaRow)
 
 # ---------------------------------------------------------------------------
 # Model pricing (mirrors Swift's ModelPricing)
@@ -57,7 +100,7 @@ def estimated_cost_fields(
     )
 
 
-def estimated_cost(r: UsageRecord) -> float:
+def estimated_cost(r: UsageRow) -> float:
     return estimated_cost_fields(
         r.model, r.input_tokens, r.cache_creation_tokens, r.output_tokens, r.cache_read_tokens
     )
@@ -68,7 +111,7 @@ def estimated_cost(r: UsageRecord) -> float:
 # ---------------------------------------------------------------------------
 
 
-def _total_tokens(r: UsageRecord) -> int:
+def _total_tokens(r: UsageRow) -> int:
     return r.input_tokens + r.output_tokens + r.cache_creation_tokens
 
 
@@ -89,7 +132,7 @@ def _add_months(start: datetime, n: int) -> datetime:
 
 
 def _build_hourly_activity(
-    records: list[UsageRecord],
+    records: list[UsageRow],
     lookback_cutoff: datetime,
     now: datetime,
 ) -> list[dict]:
@@ -106,7 +149,7 @@ def _build_hourly_activity(
 
 
 def _build_series(
-    records: list[UsageRecord],
+    records: list[UsageRow],
     costs: list[float],
     granularity: str,
     lookback_cutoff: datetime,
@@ -165,7 +208,7 @@ def _build_series(
 
 
 def _make_buckets(
-    records: list[UsageRecord],
+    records: list[UsageRow],
     cutoff: datetime,
     unit: str,
     count: int,
@@ -224,7 +267,7 @@ def _quantize_reset(value: datetime) -> datetime:
     return datetime.fromtimestamp(snapped, tz=timezone.utc)
 
 
-def _quota_history(records: list[QuotaSnapshot]) -> list[dict]:
+def _quota_history(records: list[QuotaRow]) -> list[dict]:
     """Real polled quota readings as [{timestamp, percent_used, resets_at?}], oldest first.
 
     The client renders these as a step function, holding each reading forward until
@@ -263,19 +306,19 @@ def _quota_history(records: list[QuotaSnapshot]) -> list[dict]:
 
 
 def compute_analytics(
-    session_records: list[UsageRecord],
-    weekly_records: list[UsageRecord],
-    month_records: list[UsageRecord],
-    lookback_records: list[UsageRecord],
+    session_records: list[UsageRow],
+    weekly_records: list[UsageRow],
+    month_records: list[UsageRow],
+    lookback_records: list[UsageRow],
     lifetime_cost: float,
     session_cutoff: datetime,
     weekly_cutoff: datetime,
     lookback_cutoff: datetime,
     granularity: str,
-    session_cost_records: list[UsageRecord],
-    session_quota_records: list[QuotaSnapshot] | None = None,
-    weekly_quota_records: list[QuotaSnapshot] | None = None,
-    month_quota_records: list[QuotaSnapshot] | None = None,
+    session_cost_records: list[UsageRow],
+    session_quota_records: list[QuotaRow] | None = None,
+    weekly_quota_records: list[QuotaRow] | None = None,
+    month_quota_records: list[QuotaRow] | None = None,
 ) -> dict:
     now = datetime.now(timezone.utc)
 

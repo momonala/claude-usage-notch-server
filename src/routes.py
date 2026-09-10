@@ -20,7 +20,10 @@ from flask import jsonify
 from flask import request
 from sqlalchemy import select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.orm import Session
 
+from src.analytics import QUOTA_ROW_COLUMNS
+from src.analytics import USAGE_ROW_COLUMNS
 from src.analytics import compute_analytics
 from src.analytics import estimated_cost_fields
 from src.database import session_scope
@@ -33,6 +36,15 @@ from src.telemetry import metrics
 logger = logging.getLogger(__name__)
 
 bp = Blueprint("api", __name__)
+
+
+def _quota_window(db: Session, window_type: str, cutoff: datetime) -> list:
+    """Polled quota readings for one window type since `cutoff`, oldest first."""
+    return db.execute(
+        select(*QUOTA_ROW_COLUMNS)
+        .where(QuotaSnapshot.window_type == window_type, QuotaSnapshot.timestamp >= cutoff)
+        .order_by(QuotaSnapshot.timestamp)
+    ).all()
 
 
 @bp.get("/status")
@@ -97,7 +109,7 @@ def post_records():
 @bp.get("/api/records")
 def get_records():
     since_raw = request.args.get("since")
-    stmt = select(UsageRecord).order_by(UsageRecord.timestamp)
+    stmt = select(*UsageRecord.client_columns()).order_by(UsageRecord.timestamp)
     if since_raw:
         try:
             stmt = stmt.where(UsageRecord.timestamp >= parse_timestamp(since_raw))
@@ -105,9 +117,9 @@ def get_records():
             return jsonify({"error": f"invalid 'since' timestamp: {since_raw}"}), 400
 
     with session_scope() as session:
-        records = session.scalars(stmt).all()
-        logger.info("GET /api/records: since=%s returned=%d", since_raw, len(records))
-        return jsonify([r.to_json() for r in records])
+        rows = session.execute(stmt).all()
+        logger.info("GET /api/records: since=%s returned=%d", since_raw, len(rows))
+        return jsonify([UsageRecord.row_to_json(row) for row in rows])
 
 
 @bp.post("/api/quota_snapshots")
@@ -152,7 +164,7 @@ def post_quota_snapshots():
 def get_quota_snapshots():
     since_raw = request.args.get("since")
     window_type = request.args.get("window_type")
-    stmt = select(QuotaSnapshot).order_by(QuotaSnapshot.timestamp)
+    stmt = select(*QuotaSnapshot.client_columns()).order_by(QuotaSnapshot.timestamp)
     if window_type:
         stmt = stmt.where(QuotaSnapshot.window_type == window_type)
     if since_raw:
@@ -162,14 +174,14 @@ def get_quota_snapshots():
             return jsonify({"error": f"invalid 'since' timestamp: {since_raw}"}), 400
 
     with session_scope() as session:
-        records = session.scalars(stmt).all()
+        rows = session.execute(stmt).all()
         logger.info(
             "GET /api/quota_snapshots: window_type=%s since=%s returned=%d",
             window_type,
             since_raw,
-            len(records),
+            len(rows),
         )
-        return jsonify([r.to_json() for r in records])
+        return jsonify([QuotaSnapshot.row_to_json(row) for row in rows])
 
 
 @bp.get("/api/analytics")
@@ -211,8 +223,8 @@ def get_analytics():
 
     with metrics.timed("duration"):
         with session_scope() as db:
-            windowed = db.scalars(
-                select(UsageRecord)
+            windowed = db.execute(
+                select(*USAGE_ROW_COLUMNS)
                 .where(UsageRecord.timestamp >= fetch_cutoff)
                 .order_by(UsageRecord.timestamp)
             ).all()
@@ -222,21 +234,9 @@ def get_analytics():
             # Real polled quota readings (ground truth) for the same spans as the
             # session/weekly token buckets below. Empty until a client has pushed at
             # least one reading — the app falls back to its token-based estimate then.
-            session_quota_records = db.scalars(
-                select(QuotaSnapshot)
-                .where(QuotaSnapshot.window_type == "session", QuotaSnapshot.timestamp >= session_cutoff)
-                .order_by(QuotaSnapshot.timestamp)
-            ).all()
-            weekly_quota_records = db.scalars(
-                select(QuotaSnapshot)
-                .where(QuotaSnapshot.window_type == "weekly", QuotaSnapshot.timestamp >= weekly_cutoff)
-                .order_by(QuotaSnapshot.timestamp)
-            ).all()
-            month_quota_records = db.scalars(
-                select(QuotaSnapshot)
-                .where(QuotaSnapshot.window_type == "monthly", QuotaSnapshot.timestamp >= month_cutoff)
-                .order_by(QuotaSnapshot.timestamp)
-            ).all()
+            session_quota_records = _quota_window(db, "session", session_cutoff)
+            weekly_quota_records = _quota_window(db, "weekly", weekly_cutoff)
+            month_quota_records = _quota_window(db, "monthly", month_cutoff)
 
         # Records are sorted by timestamp; bisect avoids multiple O(n) linear scans.
         timestamps = [r.timestamp for r in windowed]

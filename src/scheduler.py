@@ -40,6 +40,15 @@ _SECOND_DAILY_PING_TIME = (10, 31)  # first ping + 5h01m, so it lands in the nex
 _TIMEOUT_SECONDS = 60
 
 
+def _is_per_model_week_label(label: str) -> bool:
+    """True for per-model weekly caps such as 'week (fable)'.
+
+    Only the aggregate 'week (all models)' maps to a stored window type. Claude also
+    reports a cap per model, which is expected and skipped without warning.
+    """
+    return label.startswith("week (")
+
+
 def _parse_resets_at(raw: str) -> str | None:
     """Parse 'Jun 17, 12:40pm' or 'Jun 17 at 12:40pm' into an ISO-8601 UTC string best-effort."""
     for fmt in ("%b %d, %I:%M%p", "%b %d, %I%p", "%b %d at %I:%M%p", "%b %d at %I%p"):
@@ -89,8 +98,9 @@ def poll_quota() -> None:
         label = match.group("label").strip().lower()
         window_type = _WINDOW_MAP.get(label)
         if not window_type:
-            logger.warning("quota_poll: unrecognised label %r — skipping", label)
-            metrics.increment("unrecognised_label")
+            if not _is_per_model_week_label(label):
+                logger.warning("quota_poll: unrecognised label %r — skipping", label)
+                metrics.increment("unrecognised_label")
             continue
         resets_raw = match.group("resets")
         records.append(
