@@ -29,6 +29,7 @@ DB_PATH = _tool["db_path"]
 DATABASE_URL = f"sqlite:///{DB_PATH}"
 SPYGLASS_HOST = _tool["spyglass_host"]
 SPYGLASS_DASHBOARD_URL = _tool["spyglass_dashboard_url"]
+REPORT_WORK_PATHS: list[str] = _tool["report_work_paths"]
 
 
 def config_cli(

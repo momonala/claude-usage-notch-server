@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Claude Usage Report</title>
+<style>
+:root {
+  --bg: #f4f6f8;
+  --surface: #ffffff;
+  --text: #15191e;
+  --text-muted: #56606b;
+  --line: #dde2e7;
+  --selected-bg: #15191e;
+  --selected-text: #ffffff;
+  --series-output: #2763a8;
+  --series-cache-write: #c47a1d;
+  --series-input: #2f8a5b;
+  --series-cache-read: #a3b1c2;
+  --series-fresh: #3d4b5c;
+  --series-work: #2763a8;
+  --series-personal: #c47a1d;
+  --series-count: #3d4b5c;
+  --heat: #2763a8;
+  --model-1: #2763a8;
+  --model-2: #2f8a5b;
+  --model-3: #c47a1d;
+  --model-4: #8a4fa8;
+  --model-5: #b8434e;
+  --model-other: #a3b1c2;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 15px;
+  --text-lg: 18px;
+  --text-xl: 26px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 40px;
+  --space-10: 56px;
+  --radius: 6px;
+  --radius-sm: 2px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #101317;
+    --surface: #181c21;
+    --text: #e8ecf0;
+    --text-muted: #9aa4af;
+    --line: #2a3037;
+    --selected-bg: #e8ecf0;
+    --selected-text: #101317;
+    --series-output: #5d9be3;
+    --series-cache-write: #e09a45;
+    --series-input: #57b884;
+    --series-cache-read: #4f5d6e;
+    --series-fresh: #c3ccd6;
+    --series-work: #5d9be3;
+    --series-personal: #e09a45;
+    --series-count: #c3ccd6;
+    --heat: #5d9be3;
+    --model-1: #5d9be3;
+    --model-2: #57b884;
+    --model-3: #e09a45;
+    --model-4: #b07fd0;
+    --model-5: #e0727c;
+    --model-other: #4f5d6e;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #101317;
+  --surface: #181c21;
+  --text: #e8ecf0;
+  --text-muted: #9aa4af;
+  --line: #2a3037;
+  --selected-bg: #e8ecf0;
+  --selected-text: #101317;
+  --series-output: #5d9be3;
+  --series-cache-write: #e09a45;
+  --series-input: #57b884;
+  --series-cache-read: #4f5d6e;
+  --series-fresh: #c3ccd6;
+  --series-work: #5d9be3;
+  --series-personal: #e09a45;
+  --series-count: #c3ccd6;
+  --heat: #5d9be3;
+  --model-1: #5d9be3;
+  --model-2: #57b884;
+  --model-3: #e09a45;
+  --model-4: #b07fd0;
+  --model-5: #e0727c;
+  --model-other: #4f5d6e;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: var(--text-base)/1.5 var(--font-sans); }
+main { max-width: 1680px; margin: 0 auto; padding: var(--space-8) clamp(var(--space-4), 3vw, var(--space-8)); }
+h1 { font-size: var(--text-xl); font-weight: 650; line-height: 1.2; margin: 0 0 var(--space-2); }
+h2 { font-size: var(--text-lg); font-weight: 600; margin: var(--space-10) 0 var(--space-1); }
+h3 { font-size: var(--text-base); font-weight: 600; margin: 0 0 var(--space-3); }
+p { margin: 0; color: var(--text-muted); max-width: 80ch; }
+code { font-family: var(--font-mono); font-size: 0.92em; }
+.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+.head { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: var(--space-4); }
+.toggle { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.toggle button { font: inherit; font-size: var(--text-sm); padding: var(--space-2) var(--space-4); border: 0; background: var(--surface); color: var(--text); cursor: pointer; }
+.toggle button + button { border-left: 1px solid var(--line); }
+.toggle button:hover { background: var(--bg); }
+.toggle button[aria-pressed="true"] { background: var(--selected-bg); color: var(--selected-text); }
+.toggle button:focus-visible { outline: 2px solid var(--series-output); outline-offset: -2px; }
+
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: var(--space-6); margin: var(--space-6) 0 0; padding: var(--space-6) 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.stats dt { font-size: var(--text-sm); color: var(--text-muted); }
+.stats dd { margin: var(--space-1) 0 0; font-size: var(--text-lg); font-weight: 600; }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--space-4); margin-top: var(--space-3); }
+.split { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(520px, 100%), 1fr)); gap: var(--space-4); margin-top: var(--space-3); }
+.split .panel { margin-top: 0; }
+.chart { overflow-x: auto; }
+.chart svg { display: block; }
+.legend { display: flex; flex-wrap: wrap; gap: var(--space-4); font-size: var(--text-sm); color: var(--text-muted); margin: 0 0 var(--space-3); padding: 0; list-style: none; }
+.legend li::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: var(--radius-sm); margin-right: var(--space-2); background: var(--swatch); vertical-align: -1px; }
+svg text { fill: var(--text-muted); font-size: var(--text-xs); font-family: var(--font-sans); }
+svg text.total { fill: var(--text); font-family: var(--font-mono); font-weight: 600; }
+svg .axis { font-family: var(--font-mono); }
+
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: var(--text-sm); }
+th, td { padding: var(--space-2) var(--space-3); text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { font-weight: 600; color: var(--text-muted); }
+th:first-child, td:first-child { text-align: left; }
+td.text { text-align: left; }
+tbody tr:last-child td { border-bottom: 0; }
+.tag { font-size: var(--text-xs); color: var(--text-muted); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 0 var(--space-1); margin-left: var(--space-2); }
+
+.notes { margin: var(--space-3) 0 0; padding-left: var(--space-6); color: var(--text-muted); font-size: var(--text-sm); max-width: 100ch; }
+.notes li + li { margin-top: var(--space-2); }
+</style>
+</head>
+<body>
+<main>
+  <div class="head">
+    <div>
+      <h1>Claude usage report</h1>
+      <p id="range"></p>
+    </div>
+    <div class="toggle" role="group" aria-label="Measure">
+      <button type="button" data-mode="cost">Cost (USD)</button>
+      <button type="button" data-mode="tokens">Tokens</button>
+    </div>
+  </div>
+
+  <dl class="stats" id="stats"></dl>
+
+  <h2>Work and personal</h2>
+  <p id="work-note"></p>
+  <div class="panel">
+    <ul class="legend">
+      <li style="--swatch: var(--series-work)">Work</li>
+      <li style="--swatch: var(--series-personal)">Personal</li>
+    </ul>
+    <div class="chart" id="chart-workspace"></div>
+  </div>
+
+  <h2>New work each week</h2>
+  <p>Input, output and cache writes. Cache reads are left out so the weeks are comparable.</p>
+  <div class="panel">
+    <ul class="legend">
+      <li style="--swatch: var(--series-output)">Output</li>
+      <li style="--swatch: var(--series-cache-write)">Cache write</li>
+      <li style="--swatch: var(--series-input)">Input</li>
+    </ul>
+    <div class="chart" id="chart-fresh"></div>
+  </div>
+
+  <h2>Everything, including cache reads</h2>
+  <p id="cache-read-note"></p>
+  <div class="panel">
+    <ul class="legend">
+      <li style="--swatch: var(--series-fresh)">New work</li>
+      <li style="--swatch: var(--series-cache-read)">Cache read</li>
+    </ul>
+    <div class="chart" id="chart-all"></div>
+  </div>
+
+  <h2>Models</h2>
+  <p>The five models with the most spend, everything else grouped as Other.</p>
+  <div class="panel">
+    <ul class="legend" id="model-legend"></ul>
+    <div class="chart" id="chart-models"></div>
+  </div>
+
+  <h2>What 1% of the weekly limit buys</h2>
+  <p id="limit-note"></p>
+  <div class="panel">
+    <div class="chart" id="chart-limits"></div>
+  </div>
+
+  <h2>When you use it</h2>
+  <p id="heat-note"></p>
+  <div class="panel">
+    <div class="chart" id="chart-heat"></div>
+  </div>
+
+  <h2>Sessions</h2>
+  <p id="session-note"></p>
+  <div class="split">
+    <div class="panel">
+      <h3>Sessions by cost</h3>
+      <div class="chart" id="chart-sessions"></div>
+    </div>
+    <div class="panel table-wrap">
+      <h3>Most expensive sessions</h3>
+      <table id="table-sessions"></table>
+    </div>
+  </div>
+
+  <h2>Projects and skills</h2>
+  <p>Ranked by cost. A project counts as work when most of its requests ran under a work directory.</p>
+  <div class="split">
+    <div class="panel table-wrap">
+      <h3>Projects</h3>
+      <table id="table-projects"></table>
+    </div>
+    <div class="panel table-wrap">
+      <h3>Skills</h3>
+      <table id="table-skills"></table>
+    </div>
+  </div>
+
+  <h2>Weekly totals</h2>
+  <div class="panel table-wrap"><table id="table-weeks"></table></div>
+
+  <h2>How the numbers are worked out</h2>
+  <ul class="notes">
+    <li>Weeks start on Monday, in UTC. The first and last weeks can be partial. The heatmap uses the time zone of the machine that ran the report.</li>
+    <li>Each API request is counted once. Claude Code writes several transcript entries for one response and repeats the usage on each, so adding up raw rows roughly doubles every total.</li>
+    <li>Costs use Anthropic API list prices from <code>src/weekly_report.py</code>. A subscription seat isn't billed this way, so read them as the value of the usage, not a bill.</li>
+    <li>Output costs 5× the input rate. Cache writes cost 1.25× input for the 5-minute cache and 2× for the 1-hour cache. Cache reads use each model's own rate.</li>
+    <li>Work is any request whose working directory sits under a path in <code>report_work_paths</code> in <code>pyproject.toml</code>. Everything else counts as personal.</li>
+    <li>Weekly limit use adds up the rises between hourly readings. When the reading drops by 5 points or more before the reset time, that counts as an early reset, so a week can use more than 100%.</li>
+  </ul>
+</main>
+<script>
+const REPORT = __REPORT__;
+const weeks = REPORT.weeks;
+const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const MODEL_COLORS = ["var(--model-1)", "var(--model-2)", "var(--model-3)", "var(--model-4)", "var(--model-5)"];
+
+let mode = "cost";
+try { mode = localStorage.getItem("weekly-report-mode") || mode; } catch (e) {}
+
+const unit = () => (mode === "cost" ? "usd" : "tokens");
+const part = (t, category) => t[unit()][category];
+const sumOf = (t) => Object.values(t[unit()]).reduce((a, b) => a + b, 0);
+const freshOf = (t) => part(t, "input") + part(t, "output") + part(t, "cache_write");
+
+const formatTokens = (n) =>
+  n >= 1e9 ? (n / 1e9).toFixed(2) + "B" :
+  n >= 1e6 ? (n / 1e6).toFixed(1) + "M" :
+  n >= 1e3 ? Math.round(n / 1e3) + "K" : String(Math.round(n));
+const formatCost = (n) =>
+  n >= 1000 ? "$" + (n / 1000).toFixed(1) + "K" :
+  n >= 10 ? "$" + Math.round(n) : "$" + n.toFixed(2);
+const format = (n) => (mode === "cost" ? formatCost(n) : formatTokens(n));
+const formatCount = (n) => Math.round(n).toLocaleString("en-GB");
+const formatPct = (n) => Math.round(n * 100) + "%";
+const formatDay = (iso) =>
+  new Date(iso.slice(0, 10) + "T00:00:00Z").toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+const formatDate = (iso) =>
+  new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+function niceMax(n) {
+  if (n <= 0) return 1;
+  const step = Math.pow(10, Math.floor(Math.log10(n)));
+  return [1, 2, 2.5, 5, 10].map((m) => m * step).find((c) => c >= n);
+}
+
+function barChart(el, rows, series, opts = {}) {
+  const fmt = opts.format || format;
+  const label = opts.label || ((r) => formatDay(r.week));
+  const minSlot = 32, pad = { left: 64, right: 8, top: 24, bottom: 28 };
+  const width = Math.max(el.clientWidth, rows.length * minSlot + pad.left + pad.right);
+  const height = opts.height || Math.round(Math.min(440, Math.max(260, width * 0.24)));
+  const plotW = width - pad.left - pad.right, plotH = height - pad.top - pad.bottom;
+  const max = niceMax(Math.max(...rows.map((r) => series.reduce((a, s) => a + s.value(r), 0))) * 1.05);
+  const slot = plotW / rows.length, barW = Math.min(64, slot * 0.7);
+  const labelEvery = Math.ceil(56 / slot);
+  let svg = `<svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img">`;
+
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.top + plotH - (plotH * i) / 4;
+    svg += `<line x1="${pad.left}" x2="${width - pad.right}" y1="${y}" y2="${y}" stroke="var(--line)"/>`;
+    svg += `<text class="axis" x="${pad.left - 8}" y="${y + 4}" text-anchor="end">${fmt((max * i) / 4)}</text>`;
+  }
+
+  rows.forEach((r, i) => {
+    const x = pad.left + i * slot + (slot - barW) / 2;
+    const tip = [label(r), ...series.map((s) => `${s.name}: ${fmt(s.value(r))}`), ...(opts.extraTip ? [opts.extraTip(r)] : [])].join("\n");
+    let y = pad.top + plotH, sum = 0;
+    series.forEach((s) => {
+      const h = (plotH * s.value(r)) / max;
+      y -= h; sum += s.value(r);
+      svg += `<rect x="${x}" y="${y}" width="${barW}" height="${h}" fill="${s.color}"><title>${escapeHtml(tip)}</title></rect>`;
+    });
+    if (sum > 0) svg += `<text class="total" x="${x + barW / 2}" y="${y - 6}" text-anchor="middle">${fmt(sum)}</text>`;
+    if (i % labelEvery === 0) svg += `<text x="${x + barW / 2}" y="${height - 8}" text-anchor="middle">${escapeHtml(label(r))}</text>`;
+  });
+  el.innerHTML = svg + "</svg>";
+}
+
+function heatmap(el) {
+  const grid = REPORT.heatmap[unit()];
+  const max = Math.max(...grid.flat());
+  const pad = { left: 44, top: 8, bottom: 24 };
+  const cell = Math.max(18, Math.min(56, (el.clientWidth - pad.left) / 24));
+  const rowH = cell * 0.8;
+  const width = pad.left + cell * 24, height = pad.top + rowH * 7 + pad.bottom;
+  let svg = `<svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img">`;
+  grid.forEach((hours, d) => {
+    svg += `<text x="${pad.left - 8}" y="${pad.top + d * rowH + rowH / 2 + 4}" text-anchor="end">${DAYS[d]}</text>`;
+    hours.forEach((v, h) => {
+      const x = pad.left + h * cell + 1, y = pad.top + d * rowH + 1, w = cell - 2, hh = rowH - 2;
+      const tip = `${DAYS[d]} ${String(h).padStart(2, "0")}:00: ${format(v)}`;
+      const opacity = max > 0 && v > 0 ? 0.08 + 0.92 * (v / max) : 0;
+      svg += `<rect x="${x}" y="${y}" width="${w}" height="${hh}" rx="2" fill="var(--line)"><title>${tip}</title></rect>`;
+      if (opacity) svg += `<rect x="${x}" y="${y}" width="${w}" height="${hh}" rx="2" fill="var(--heat)" fill-opacity="${opacity.toFixed(3)}"><title>${tip}</title></rect>`;
+    });
+  });
+  for (let h = 0; h < 24; h += 3) {
+    svg += `<text class="axis" x="${pad.left + h * cell + cell / 2}" y="${height - 6}" text-anchor="middle">${String(h).padStart(2, "0")}</text>`;
+  }
+  el.innerHTML = svg + "</svg>";
+}
+
+function table(el, head, rows) {
+  el.innerHTML = `<thead><tr>${head.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr>${r.join("")}</tr>`).join("")}</tbody>`;
+}
+const td = (v, cls = "num") => `<td class="${cls}">${v}</td>`;
+const workTag = (isWork) => (isWork ? `<span class="tag">work</span>` : "");
+
+function render() {
+  document.querySelectorAll(".toggle button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.mode === mode)));
+  const costMode = mode === "cost";
+
+  const total = weeks.reduce((a, w) => a + sumOf(w.all), 0);
+  const work = weeks.reduce((a, w) => a + sumOf(w.work), 0);
+  const cacheRead = weeks.reduce((a, w) => a + part(w.all, "cache_read"), 0);
+  const active = weeks.filter((w) => w.all.reqs > 0);
+  const peak = active.reduce((a, w) => (sumOf(w.all) > sumOf(a.all) ? w : a), active[0]);
+
+  document.getElementById("range").textContent =
+    `${formatDate(REPORT.first)} to ${formatDate(REPORT.last)} · ${weeks.length} weeks`;
+
+  document.getElementById("stats").innerHTML = [
+    [costMode ? "Total cost" : "Total tokens", format(total)],
+    ["Weekly average", format(total / weeks.length)],
+    ["Work share", formatPct(total ? work / total : 0)],
+    ["Busiest week", `${format(sumOf(peak.all))} · ${formatDay(peak.week)}`],
+    ["Cache reads", `${formatPct(total ? cacheRead / total : 0)} of ${costMode ? "cost" : "tokens"}`],
+  ].map(([l, v]) => `<div><dt>${l}</dt><dd class="num">${v}</dd></div>`).join("");
+
+  document.getElementById("work-note").textContent =
+    `Work is ${formatPct(total ? work / total : 0)} of the ${costMode ? "cost" : "tokens"}. Your employer's spend report shows one total per model for all of it.`;
+  barChart(document.getElementById("chart-workspace"), weeks, [
+    { name: "Work", color: "var(--series-work)", value: (w) => sumOf(w.work) },
+    { name: "Personal", color: "var(--series-personal)", value: (w) => sumOf(w.personal) },
+  ]);
+
+  barChart(document.getElementById("chart-fresh"), weeks, [
+    { name: "Input", color: "var(--series-input)", value: (w) => part(w.all, "input") },
+    { name: "Cache write", color: "var(--series-cache-write)", value: (w) => part(w.all, "cache_write") },
+    { name: "Output", color: "var(--series-output)", value: (w) => part(w.all, "output") },
+  ]);
+
+  document.getElementById("cache-read-note").textContent = costMode
+    ? `Cache reads are cheap per token but there are a lot of them: ${formatPct(cacheRead / total)} of the cost.`
+    : `Cache reads are ${formatPct(cacheRead / total)} of all tokens, so they dwarf the rest of this chart.`;
+  barChart(document.getElementById("chart-all"), weeks, [
+    { name: "New work", color: "var(--series-fresh)", value: (w) => freshOf(w.all) },
+    { name: "Cache read", color: "var(--series-cache-read)", value: (w) => part(w.all, "cache_read") },
+  ]);
+
+  const models = [...REPORT.models, "Other"];
+  const modelColor = (i) => MODEL_COLORS[i] || "var(--model-other)";
+  document.getElementById("model-legend").innerHTML =
+    models.map((m, i) => `<li style="--swatch: ${modelColor(i)}">${escapeHtml(m)}</li>`).join("");
+  barChart(document.getElementById("chart-models"), weeks,
+    models.map((m, i) => ({ name: m, color: modelColor(i), value: (w) => sumOf(w.models[m]) })));
+
+  const limits = REPORT.limits;
+  const recent = limits.slice(-4);
+  const recentAvg = recent.reduce((a, l) => a + l.usd_per_pct, 0) / Math.max(1, recent.length);
+  document.getElementById("limit-note").textContent = limits.length
+    ? `Dollars of usage per 1% of the weekly limit, per limit window. Over the last ${recent.length} windows, 1% bought about ${formatCost(recentAvg)}, so a full week's limit is worth about ${formatCost(recentAvg * 100)} at list prices. Higher bars mean the limit went further.`
+    : "No weekly limit readings in this range.";
+  if (limits.length) {
+    barChart(document.getElementById("chart-limits"), limits,
+      [{ name: "Per 1%", color: "var(--series-output)", value: (l) => l.usd_per_pct }],
+      {
+        format: formatCost,
+        height: 260,
+        label: (l) => formatDay(l.reset),
+        extraTip: (l) => `Limit used: ${formatPct(l.used)}${l.midweek_resets ? ` (${l.midweek_resets} early reset${l.midweek_resets > 1 ? "s" : ""})` : ""}\nSpent: ${formatCost(l.usd)}`,
+      });
+  }
+
+  const flatHeat = REPORT.heatmap[unit()].flat();
+  const busiest = flatHeat.indexOf(Math.max(...flatHeat));
+  document.getElementById("heat-note").textContent =
+    `${costMode ? "Cost" : "Tokens"} by weekday and hour, in ${REPORT.heatmap.tz}. Busiest slot: ${DAYS[Math.floor(busiest / 24)]} ${String(busiest % 24).padStart(2, "0")}:00.`;
+  heatmap(document.getElementById("chart-heat"));
+
+  const s = REPORT.sessions;
+  document.getElementById("session-note").textContent =
+    `${formatCount(s.count)} sessions. Half cost under ${formatCost(s.median_usd)}, and 1 in 10 cost more than ${formatCost(s.p90_usd)}. Session charts always show cost.`;
+  const bucketLabel = (b) => (b.to === null ? `$${b.from}+` : `$${b.from}–${b.to}`);
+  barChart(document.getElementById("chart-sessions"), s.buckets,
+    [{ name: "Sessions", color: "var(--series-count)", value: (b) => b.count }],
+    { format: formatCount, height: 260, label: bucketLabel, extraTip: (b) => `Spent: ${formatCost(b.usd)}` });
+  table(document.getElementById("table-sessions"), ["Project", "Started", "Length", "Cost"],
+    s.top.map((t) => [
+      td(escapeHtml(t.project) + workTag(t.work), "text"),
+      td(formatDate(t.start), "text"),
+      td(t.minutes >= 60 ? `${(t.minutes / 60).toFixed(1)} h` : `${t.minutes} min`),
+      td(formatCost(t.usd)),
+    ]));
+
+  const groupRows = (groups) => groups.map((g) => [
+    td(escapeHtml(g.name) + workTag(g.work), "text"),
+    td(formatCount(g.reqs)),
+    td(formatCount(g.sessions)),
+    td(formatDay(g.last), "text"),
+    td(`<strong>${format(sumOf(g))}</strong>`),
+  ]);
+  const groupHead = ["Name", "Requests", "Sessions", "Last used", costMode ? "Cost" : "Tokens"];
+  table(document.getElementById("table-projects"), groupHead, groupRows(REPORT.projects));
+  table(document.getElementById("table-skills"), groupHead, groupRows(REPORT.skills));
+
+  table(document.getElementById("table-weeks"),
+    ["Week of", "Requests", "Input", "Output", "Cache write", "Cache read", "Work", "Personal", "Total"],
+    weeks.map((w) => [
+      td(formatDay(w.week), "text"),
+      td(formatCount(w.all.reqs)),
+      ...["input", "output", "cache_write", "cache_read"].map((c) => td(format(part(w.all, c)))),
+      td(format(sumOf(w.work))),
+      td(format(sumOf(w.personal))),
+      td(`<strong>${format(sumOf(w.all))}</strong>`),
+    ]));
+}
+
+document.querySelectorAll(".toggle button").forEach((b) => {
+  b.addEventListener("click", () => {
+    mode = b.dataset.mode;
+    try { localStorage.setItem("weekly-report-mode", mode); } catch (e) {}
+    render();
+  });
+});
+render();
+
+let resizeTimer;
+new ResizeObserver(() => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(render, 100);
+}).observe(document.querySelector("main"));
+</script>
+</body>
+</html>

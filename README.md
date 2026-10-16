@@ -42,6 +42,31 @@ uv sync
 uv run app          # Flask API on flask_port
 ```
 
+### Usage report
+
+```bash
+bash sync.sh pull                                    # copy the DB down from the Pi
+uv run weekly-report                                 # all data -> tmp/weekly-report.html
+uv run weekly-report --since 2026-07-20 --out ~/Desktop/claude-usage.html
+```
+
+Writes one HTML file with no dependencies. It opens in cost view, with a switch to tokens. Sections:
+work vs personal per week, new work vs cache reads, model mix, dollars per 1% of the weekly limit,
+a weekday × hour heatmap, session cost spread with the most expensive sessions, and top projects and
+skills.
+
+- **Each `request_id` counts once.** Claude Code writes several transcript entries per API response
+  and repeats the usage on each, so adding up raw rows roughly doubles the totals.
+- **Work vs personal comes from the working directory.** A request is work when its `cwd` contains a
+  path from `report_work_paths` in `pyproject.toml`. Old paths stay in that list after a repo moves,
+  or its history flips to personal.
+- **Costs are list-price estimates**, from the `_RATES` table in `src/weekly_report.py`. The command
+  warns about any model missing from it and counts that model as $0.
+- **The 1-hour cache-write rate (2× input) is unverified.** Most cache writes use the 1-hour cache,
+  so this one number moves the cost totals noticeably.
+- **Weekly limit use adds up rises between readings.** Anthropic sometimes resets the weekly limit
+  early without changing `resets_at`, so the peak reading alone undercounts those weeks.
+
 ## Architecture
 
 ```
@@ -63,6 +88,7 @@ migration tooling, since it's a single-user store with no reverse-compatibility 
 | `src/database.py` | Engine, `session_scope`, `init_db` |
 | `src/config.py` | All config (read from `pyproject.toml`) + `DATABASE_URL`; CLI for install scripts |
 | `src/scheduler.py` | Quota polling + daily ping/backfill jobs, run in-process via APScheduler (`start()` is called from `create_app()`) |
+| `src/weekly_report.py` | `uv run weekly-report`: usage and cost report, rendered into `src/weekly_report.html` |
 | `src/telemetry.py` | Self-observability: `initialize()`s this service against [Spyglass](https://github.com/momonala/spyglass) once per process, exporting `logger`/`metrics` |
 
 ## Observability

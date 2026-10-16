@@ -1,6 +1,6 @@
 #!/bin/bash
 
-REMOTE_URL="mnalavadi@192.168.2.107"
+REMOTE_URL="pi"
 PROJECT_NAME=$(basename "$(pwd)")
 DB_NAME="data/claude-usage.db"
 

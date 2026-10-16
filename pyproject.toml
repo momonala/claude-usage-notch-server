@@ -39,6 +39,7 @@ flask_host = "0.0.0.0"
 db_path = "data/claude-usage.db"
 spyglass_host = "localhost:5013"
 spyglass_dashboard_url = "https://spyglass.mnalavadi.org/dashboard/claude-usage-notch-server"
+report_work_paths = ["/code/rev-ops", "/code/market-data", "/code/ingestion", "/code/analytics"]
 
 [build-system]
 requires = ["hatchling"]
@@ -51,6 +52,7 @@ packages = ["."]
 config = "src.config:main"
 app = "src.app:main"
 backfill = "src.backfill:main"
+weekly-report = "src.weekly_report:main"
 
 [tool.black]
 line-length = 110
