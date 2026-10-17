@@ -6,6 +6,7 @@ After=multi-user.target
 WorkingDirectory=/home/mnalavadi/claude-usage-notch-server
 Type=idle
 ExecStart=/home/mnalavadi/.local/bin/uv run app
+Environment=PATH=/home/mnalavadi/.local/bin:/usr/local/bin:/usr/bin:/bin
 User=mnalavadi
 
 [Install]
