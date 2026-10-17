@@ -81,7 +81,7 @@ def _log_claude_failure(task: str, result: subprocess.CompletedProcess[str]) -> 
 def poll_quota() -> None:
     with metrics.timed("duration"):
         result = subprocess.run(
-            ["claude", "--permission-mode", "bypassPermissions", "-p", "/usage"],
+            ["claude", "--strict-mcp-config", "--permission-mode", "bypassPermissions", "-p", "/usage"],
             capture_output=True,
             text=True,
             timeout=_TIMEOUT_SECONDS,
@@ -135,6 +135,7 @@ def daily_ping() -> None:
     ping = subprocess.run(
         [
             "claude",
+            "--strict-mcp-config",
             "--permission-mode",
             "bypassPermissions",
             "--model",
