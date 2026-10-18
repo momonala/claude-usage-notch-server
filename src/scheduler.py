@@ -5,8 +5,8 @@ Runs in-process as an APScheduler `BackgroundScheduler`, started by
 scheduler process or systemd unit.
 
 Tasks:
-  - quota_poll  (every 2 min)  — runs `claude -p /usage`, parses quota %, POSTs to /api/quota_snapshots
-  - daily_ping  (twice a day)  — keeps Pro subscription alive + runs backfill
+  - quota_poll  (every 5 min)  — runs `claude -p /usage`, parses quota %, POSTs to /api/quota_snapshots
+  - backfill    (daily 05:30) — runs `uv run backfill` to catch records the Mac missed
 """
 
 import logging
@@ -34,9 +34,8 @@ _SUBSCRIPTION_ONLY_MARKER = "You are currently using your subscription to power 
 _SERVER = f"http://localhost:{FLASK_PORT}"
 SOURCE = socket.gethostname()
 
-_QUOTA_POLL_INTERVAL_MINUTES = 2
-_FIRST_DAILY_PING_TIME = (5, 30)
-_SECOND_DAILY_PING_TIME = (10, 31)  # first ping + 5h01m, so it lands in the next quota window
+_QUOTA_POLL_INTERVAL_MINUTES = 5
+_BACKFILL_TIME = (5, 30)
 _TIMEOUT_SECONDS = 60
 
 
@@ -81,7 +80,15 @@ def _log_claude_failure(task: str, result: subprocess.CompletedProcess[str]) -> 
 def poll_quota() -> None:
     with metrics.timed("duration"):
         result = subprocess.run(
-            ["claude", "--strict-mcp-config", "--permission-mode", "bypassPermissions", "-p", "/usage"],
+            [
+                "claude",
+                "--strict-mcp-config",
+                "--no-session-persistence",
+                "--permission-mode",
+                "bypassPermissions",
+                "-p",
+                "/usage",
+            ],
             capture_output=True,
             text=True,
             timeout=_TIMEOUT_SECONDS,
@@ -131,56 +138,36 @@ def poll_quota() -> None:
     metrics.increment("success")
 
 
-def daily_ping() -> None:
-    ping = subprocess.run(
-        [
-            "claude",
-            "--strict-mcp-config",
-            "--permission-mode",
-            "bypassPermissions",
-            "--model",
-            "haiku",
-            "-p",
-            "ping reply in one word",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=_TIMEOUT_SECONDS,
-    )
-    if ping.returncode != 0:
-        _log_claude_failure("daily_ping", ping)
-        metrics.increment("ping_failure")
-    else:
-        logger.info("daily_ping: ping ok — %s", ping.stdout.strip())
-        metrics.increment("ping_success")
-
+def backfill() -> None:
     uv_bin = shutil.which("uv") or "/home/mnalavadi/.local/bin/uv"
-    backfill = subprocess.run(
+    result = subprocess.run(
         [uv_bin, "run", "backfill"],
         capture_output=True,
         text=True,
         timeout=_TIMEOUT_SECONDS,
     )
-    if backfill.stdout.strip():
-        logger.info("daily_ping: backfill stdout:\n%s", backfill.stdout.rstrip())
-    if backfill.returncode != 0:
-        if backfill.stderr.strip():
-            logger.error("daily_ping: backfill stderr:\n%s", backfill.stderr.rstrip())
-        logger.error("daily_ping: backfill exited with code %d", backfill.returncode)
-        metrics.increment("backfill_failure")
+    if result.stdout.strip():
+        logger.info("backfill: stdout:\n%s", result.stdout.rstrip())
+    if result.returncode != 0:
+        if result.stderr.strip():
+            logger.error("backfill: stderr:\n%s", result.stderr.rstrip())
+        logger.error("backfill: exited with code %d", result.returncode)
+        metrics.increment("failure")
     else:
-        logger.info("daily_ping: backfill ok")
-        metrics.increment("backfill_success")
+        logger.info("backfill: ok")
+        metrics.increment("success")
 
 
 def start() -> BackgroundScheduler:
-    """Schedule quota polling + daily pings and start running them in the background."""
+    """Schedule quota polling + the daily backfill and start running them in the background."""
     scheduler = BackgroundScheduler()
     scheduler.add_job(
-        poll_quota, "interval", minutes=_QUOTA_POLL_INTERVAL_MINUTES, next_run_time=datetime.now()
+        poll_quota,
+        "interval",
+        minutes=_QUOTA_POLL_INTERVAL_MINUTES,
+        next_run_time=datetime.now(),
     )
-    scheduler.add_job(daily_ping, "cron", hour=_FIRST_DAILY_PING_TIME[0], minute=_FIRST_DAILY_PING_TIME[1])
-    scheduler.add_job(daily_ping, "cron", hour=_SECOND_DAILY_PING_TIME[0], minute=_SECOND_DAILY_PING_TIME[1])
+    scheduler.add_job(backfill, "cron", hour=_BACKFILL_TIME[0], minute=_BACKFILL_TIME[1])
     scheduler.start()
     logger.info("scheduler started (source=%s, server=%s)", SOURCE, _SERVER)
     return scheduler

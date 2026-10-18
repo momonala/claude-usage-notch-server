@@ -87,7 +87,7 @@ migration tooling, since it's a single-user store with no reverse-compatibility 
 | `src/analytics.py` | On-demand aggregation for `/api/analytics` (cost, breakdowns, buckets) |
 | `src/database.py` | Engine, `session_scope`, `init_db` |
 | `src/config.py` | All config (read from `pyproject.toml`) + `DATABASE_URL`; CLI for install scripts |
-| `src/scheduler.py` | Quota polling + daily ping/backfill jobs, run in-process via APScheduler (`start()` is called from `create_app()`) |
+| `src/scheduler.py` | Quota polling + daily backfill jobs, run in-process via APScheduler (`start()` is called from `create_app()`) |
 | `src/weekly_report.py` | `uv run weekly-report`: usage and cost report, rendered into `src/weekly_report.html` |
 | `src/telemetry.py` | Self-observability: `initialize()`s this service against [Spyglass](https://github.com/momonala/spyglass) once per process, exporting `logger`/`metrics` |
 
@@ -112,8 +112,7 @@ Metrics emitted (stat names auto-prefixed `claude-usage-notch-server.{function}.
 | `get_analytics.duration` | `routes.py` | `/api/analytics` latency (full-table scan for `lifetime_cost` on every call) |
 | `poll_quota.duration` | `scheduler.py` | `claude -p /usage` subprocess latency |
 | `poll_quota.success` / `claude_error` / `unrecognised_label` / `no_quota_lines_matched` | `scheduler.py` | Quota-poll outcome, including early warning if `claude`'s `/usage` output format drifts |
-| `daily_ping.ping_success` / `ping_failure` | `scheduler.py` | Subscription keep-alive ping outcome |
-| `daily_ping.backfill_duration`, `backfill_success` / `backfill_failure` | `scheduler.py` | Nightly backfill subprocess outcome/latency |
+| `backfill.success` / `failure` | `scheduler.py` | Daily backfill subprocess outcome |
 
 ## API
 
