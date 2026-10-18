@@ -163,9 +163,9 @@ def daily_ping() -> None:
     )
     if backfill.stdout.strip():
         logger.info("daily_ping: backfill stdout:\n%s", backfill.stdout.rstrip())
-    if backfill.stderr.strip():
-        logger.info("daily_ping: backfill stderr:\n%s", backfill.stderr.rstrip())
     if backfill.returncode != 0:
+        if backfill.stderr.strip():
+            logger.error("daily_ping: backfill stderr:\n%s", backfill.stderr.rstrip())
         logger.error("daily_ping: backfill exited with code %d", backfill.returncode)
         metrics.increment("backfill_failure")
     else:

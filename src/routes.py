@@ -113,7 +113,7 @@ def post_records():
                 stats.last_updated = datetime.now(timezone.utc)
 
     counts = _insert_counts(result, len(uuids))
-    logger.info("POST /api/records: inserted=%d skipped=%d", counts["inserted"], counts["skipped"])
+    logger.debug("POST /api/records: inserted=%d skipped=%d", counts["inserted"], counts["skipped"])
     metrics.increment("records_inserted", counts["inserted"])
     return jsonify(counts)
 
