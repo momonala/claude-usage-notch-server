@@ -155,6 +155,28 @@ def test_quota_post_is_idempotent_by_window_type_and_timestamp(client):
     assert len(client.get("/api/quota_snapshots").get_json()) == 1
 
 
+def test_quota_post_stores_only_changes_and_a_periodic_heartbeat(client):
+    """Unchanged readings are dropped until the heartbeat interval keeps the step's right end recent."""
+    posts = [
+        _quota("session", "2026-06-16T12:00:00.000Z"),
+        _quota("session", "2026-06-16T12:01:00.000Z"),
+        _quota("session", "2026-06-16T12:02:00.000Z", percent_used=0.5),
+        _quota("session", "2026-06-16T12:09:00.000Z", percent_used=0.5),
+        _quota("session", "2026-06-16T12:12:00.000Z", percent_used=0.5),
+        _quota("weekly", "2026-06-16T12:01:00.000Z"),
+    ]
+    for snapshot in posts:
+        client.post("/api/quota_snapshots", json=[snapshot])
+
+    stored = [(q["window_type"], q["timestamp"]) for q in client.get("/api/quota_snapshots").get_json()]
+    assert stored == [
+        ("session", "2026-06-16T12:00:00.000Z"),
+        ("weekly", "2026-06-16T12:01:00.000Z"),
+        ("session", "2026-06-16T12:02:00.000Z"),
+        ("session", "2026-06-16T12:12:00.000Z"),
+    ]
+
+
 def test_quota_get_filters_by_window_type_and_since(client):
     client.post(
         "/api/quota_snapshots",
@@ -281,20 +303,20 @@ def test_analytics_quota_history_collapses_unchanged_readings(client):
         "/api/quota_snapshots",
         json=[
             _quota("session", "2026-06-11T08:00:00.000Z", percent_used=0.5),
-            _quota("session", "2026-06-11T08:01:00.000Z", percent_used=0.5),
-            _quota("session", "2026-06-11T08:02:00.000Z", percent_used=0.5),
-            _quota("session", "2026-06-11T08:03:00.000Z", percent_used=0.7),
-            _quota("session", "2026-06-11T08:04:00.000Z", percent_used=0.7),
+            _quota("session", "2026-06-11T08:10:00.000Z", percent_used=0.5),
+            _quota("session", "2026-06-11T08:20:00.000Z", percent_used=0.5),
+            _quota("session", "2026-06-11T08:30:00.000Z", percent_used=0.7),
+            _quota("session", "2026-06-11T08:40:00.000Z", percent_used=0.7),
         ],
     )
     history = client.get(f"/api/analytics?{_ANALYTICS_PARAMS}").get_json()["session_quota_history"]
 
     # 0.5 keeps its run-START timestamp (the step begins there, not where it ends),
-    # 0.7 is the transition, and 08:04 is the final anchor holding the step to the edge.
+    # 0.7 is the transition, and 08:40 is the final anchor holding the step to the edge.
     assert [(p["timestamp"], p["percent_used"]) for p in history] == [
         ("2026-06-11T08:00:00.000Z", 0.5),
-        ("2026-06-11T08:03:00.000Z", 0.7),
-        ("2026-06-11T08:04:00.000Z", 0.7),
+        ("2026-06-11T08:30:00.000Z", 0.7),
+        ("2026-06-11T08:40:00.000Z", 0.7),
     ]
 
 

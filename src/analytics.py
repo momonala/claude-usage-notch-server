@@ -240,7 +240,7 @@ def _make_buckets(
 _RESET_QUANTUM_SECONDS = 60
 
 
-def _quantize_reset(value: datetime) -> datetime:
+def quantize_reset(value: datetime) -> datetime:
     # Values read back from SQLite are naive-but-UTC; `.timestamp()` would read a
     # naive datetime as *local* time and shift every reset by the host's UTC offset.
     if value.tzinfo is None:
@@ -267,7 +267,7 @@ def _quota_history(records: list[QuotaRow]) -> list[dict]:
     previous_signature: tuple | None = None
 
     for index, q in enumerate(records):
-        reset = _quantize_reset(q.resets_at) if q.resets_at else None
+        reset = quantize_reset(q.resets_at) if q.resets_at else None
         signature = (q.percent_used, reset)
         is_last = index == len(records) - 1
 

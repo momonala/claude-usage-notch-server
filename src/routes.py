@@ -12,7 +12,9 @@ GET  /api/analytics?session_since=&session_cost_since=&weekly_since=&month_since
 
 import bisect
 import logging
+import threading
 from datetime import datetime
+from datetime import timedelta
 
 from flask import Blueprint
 from flask import jsonify
@@ -26,6 +28,7 @@ from src.analytics import AnalyticsRequest
 from src.analytics import QuotaRow
 from src.analytics import UsageRow
 from src.analytics import compute_analytics
+from src.analytics import quantize_reset
 from src.database import session_scope
 from src.ingest import insert_usage_records
 from src.models import QuotaSnapshot
@@ -53,6 +56,30 @@ def _json_array(endpoint: str):
         logger.warning("%s: rejected non-array body (type=%s)", endpoint, type(payload).__name__)
         return None
     return payload
+
+
+QUOTA_HEARTBEAT_INTERVAL = timedelta(minutes=10)
+
+_last_stored_quota: dict[str, tuple[tuple, datetime]] = {}
+_last_stored_quota_lock = threading.Lock()
+
+
+def _claim_quota_row(row: dict) -> bool:
+    """True if this reading should be stored: its value changed, or the heartbeat interval passed.
+
+    Analytics renders quota as a step function, so an unchanged reading adds nothing but the
+    right-hand anchor of the step, which the heartbeat keeps recent.
+    """
+    reset = quantize_reset(row["resets_at"]) if row["resets_at"] else None
+    signature = (row["percent_used"], reset)
+    with _last_stored_quota_lock:
+        last = _last_stored_quota.get(row["window_type"])
+        if last is not None:
+            last_signature, last_timestamp = last
+            if signature == last_signature and row["timestamp"] < last_timestamp + QUOTA_HEARTBEAT_INTERVAL:
+                return False
+        _last_stored_quota[row["window_type"]] = (signature, row["timestamp"])
+        return True
 
 
 def _insert_counts(result, submitted: int) -> dict:
@@ -117,16 +144,18 @@ def post_quota_snapshots():
             continue
         rows[(data["window_type"], data["timestamp"])] = data
 
-    if not rows:
-        return jsonify({"inserted": 0, "skipped": 0})
+    new_rows = [row for _, row in sorted(rows.items(), key=lambda item: item[0][1]) if _claim_quota_row(row)]
+    if not new_rows:
+        return jsonify({"inserted": 0, "skipped": len(rows)})
 
     with session_scope() as session:
         stmt = sqlite_insert(QuotaSnapshot).on_conflict_do_nothing(
             index_elements=["window_type", "timestamp"]
         )
-        result = session.connection().execute(stmt, list(rows.values()))
+        result = session.connection().execute(stmt, new_rows)
 
-    counts = _insert_counts(result, len(rows))
+    counts = _insert_counts(result, len(new_rows))
+    counts["skipped"] += len(rows) - len(new_rows)
     logger.debug("POST /api/quota_snapshots: inserted=%d skipped=%d", counts["inserted"], counts["skipped"])
     metrics.increment("quota_snapshots_inserted", counts["inserted"])
     return jsonify(counts)

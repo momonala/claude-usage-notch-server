@@ -1,9 +1,9 @@
 """SQLAlchemy models for the stored usage history.
 
 `usage_records` is one row per `assistant`-type JSONL line from
-~/.claude/projects/**/*.jsonl; `quota_snapshots` is one row per polled quota
-reading. The notch app POSTs both and reads aggregates back from
-/api/analytics.
+~/.claude/projects/**/*.jsonl; `quota_snapshots` holds polled quota readings,
+stored only when the value changes plus a periodic heartbeat (see `routes.py`).
+The notch app POSTs both and reads aggregates back from /api/analytics.
 """
 
 from datetime import datetime
@@ -133,12 +133,7 @@ class UsageRecord(Base):
         DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
     )
 
-    __table_args__ = (
-        Index("idx_usage_records_timestamp", "timestamp"),
-        Index("idx_usage_records_session_id", "session_id"),
-        Index("idx_usage_records_project", "project"),
-        Index("idx_usage_records_request_id", "request_id"),
-    )
+    __table_args__ = (Index("idx_usage_records_timestamp", "timestamp"),)
 
     # Fields the client sends and the API returns. `ingested_at` is server-owned
     # and excluded from both directions.

@@ -9,6 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 import src.database as database
+import src.routes as routes
 from src.models import Base
 
 
@@ -19,5 +20,6 @@ def temp_db(tmp_path, monkeypatch):
     monkeypatch.setattr(
         database, "SessionLocal", sessionmaker(bind=engine, expire_on_commit=False, future=True)
     )
+    monkeypatch.setattr(routes, "_last_stored_quota", {})
     Base.metadata.create_all(engine)
     yield

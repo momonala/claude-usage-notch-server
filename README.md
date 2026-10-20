@@ -109,7 +109,7 @@ Metrics emitted (stat names auto-prefixed `claude-usage-notch-server.{function}.
 | Stat | Where | Meaning |
 |------|-------|---------|
 | `post_records.records_inserted` | `routes.py` | `/api/records` ingest volume |
-| `post_quota_snapshots.quota_snapshots_inserted` / `quota_snapshots_skipped` | `routes.py` | `/api/quota_snapshots` ingest volume |
+| `post_quota_snapshots.quota_snapshots_inserted` | `routes.py` | `/api/quota_snapshots` ingest volume |
 | `get_analytics.duration` | `routes.py` | `/api/analytics` latency (full-table scan for `lifetime_cost` on every call) |
 | `backfill.records_inserted` | `backfill.py` | New records the daily backfill found on this machine |
 
@@ -152,7 +152,9 @@ fetched from the provider. `window_type` is the app's own window name
 (`session`, `weekly`, `weeklyModel`, `monthly`), which is what
 `GET /api/analytics` filters on. Upsert is
 `INSERT … ON CONFLICT(window_type, timestamp) DO NOTHING`, so re-posting (or two
-devices polling the same account a moment apart) is safe.
+devices polling the same account a moment apart) is safe. A reading is only stored
+when its value or reset time changed, or `QUOTA_HEARTBEAT_INTERVAL` (10 min) passed
+since the last stored one for that window; the rest count as `skipped`.
 
 ```bash
 curl -X POST http://localhost:5014/api/quota_snapshots \
