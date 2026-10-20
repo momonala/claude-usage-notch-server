@@ -6,13 +6,14 @@ Served by systemd in production (see install/).
 
 import logging
 
+from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask
 
+from src.backfill import backfill
 from src.config import FLASK_HOST
 from src.config import FLASK_PORT
 from src.database import init_db
 from src.routes import bp
-from src.scheduler import start as start_scheduler
 from src.telemetry import logger as _telemetry_logger  # noqa: F401  (wires stdout + Spyglass logging)
 
 logging.getLogger("werkzeug").setLevel(logging.WARNING)
@@ -23,7 +24,9 @@ def create_app() -> Flask:
     app = Flask(__name__)
     app.register_blueprint(bp)
     init_db()
-    start_scheduler()
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(backfill, "cron", hour=5, minute=30)
+    scheduler.start()
     return app
 
 

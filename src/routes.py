@@ -13,7 +13,6 @@ GET  /api/analytics?session_since=&session_cost_since=&weekly_since=&month_since
 import bisect
 import logging
 from datetime import datetime
-from datetime import timezone
 
 from flask import Blueprint
 from flask import jsonify
@@ -27,8 +26,8 @@ from src.analytics import AnalyticsRequest
 from src.analytics import QuotaRow
 from src.analytics import UsageRow
 from src.analytics import compute_analytics
-from src.analytics import estimated_cost_fields
 from src.database import session_scope
+from src.ingest import insert_usage_records
 from src.models import QuotaSnapshot
 from src.models import UsageRecord
 from src.models import UsageStats
@@ -73,46 +72,7 @@ def post_records():
     if payload is None:
         return jsonify({"error": "expected a JSON array of records"}), 400
 
-    logger.debug("POST /api/records: received batch of %d", len(payload))
-
-    # Deduplicate within the batch; last write wins for a repeated uuid.
-    # Skip malformed records missing a uuid rather than aborting the whole batch.
-    rows = {}
-    for item in payload:
-        if not isinstance(item, dict) or not item.get("uuid"):
-            logger.warning("POST /api/records: skipping record with missing uuid")
-            continue
-        rows[item["uuid"]] = UsageRecord.row_from_json(item)
-    if not rows:
-        return jsonify({"inserted": 0, "skipped": 0})
-
-    uuids = list(rows.keys())
-    with session_scope() as session:
-        existing_uuids = {
-            row[0] for row in session.execute(select(UsageRecord.uuid).where(UsageRecord.uuid.in_(uuids)))
-        }
-        new_row_data = [data for uuid, data in rows.items() if uuid not in existing_uuids]
-
-        stmt = sqlite_insert(UsageRecord).on_conflict_do_nothing(index_elements=["uuid"])
-        result = session.connection().execute(stmt, list(rows.values()))
-
-        if new_row_data:
-            cost_delta = sum(
-                estimated_cost_fields(
-                    d["model"],
-                    d["input_tokens"],
-                    d["cache_creation_tokens"],
-                    d["output_tokens"],
-                    d["cache_read_tokens"],
-                )
-                for d in new_row_data
-            )
-            stats = session.get(UsageStats, 1)
-            if stats is not None:
-                stats.lifetime_cost += cost_delta
-                stats.last_updated = datetime.now(timezone.utc)
-
-    counts = _insert_counts(result, len(uuids))
+    counts = insert_usage_records(payload)
     logger.debug("POST /api/records: inserted=%d skipped=%d", counts["inserted"], counts["skipped"])
     metrics.increment("records_inserted", counts["inserted"])
     return jsonify(counts)

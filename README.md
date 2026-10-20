@@ -81,13 +81,14 @@ migration tooling, since it's a single-user store with no reverse-compatibility 
 
 | File | Role |
 |------|------|
-| `src/app.py` | Flask app factory + entry point (`uv run app`) |
+| `src/app.py` | Flask app factory + entry point (`uv run app`); schedules the daily 05:30 backfill in-process via APScheduler |
 | `src/routes.py` | The four endpoints below |
 | `src/models.py` | `UsageRecord` model + JSON (de)serialization |
 | `src/analytics.py` | On-demand aggregation for `/api/analytics` (cost, breakdowns, buckets) |
 | `src/database.py` | Engine, `session_scope`, `init_db` |
 | `src/config.py` | All config (read from `pyproject.toml`) + `DATABASE_URL`; CLI for install scripts |
-| `src/scheduler.py` | Quota polling + daily backfill jobs, run in-process via APScheduler (`start()` is called from `create_app()`) |
+| `src/ingest.py` | `insert_usage_records`: dedup by uuid, insert, bump lifetime cost. Shared by `POST /api/records` and the backfill |
+| `src/backfill.py` | `uv run backfill`: load this machine's `~/.claude/projects/**/*.jsonl` straight into the DB |
 | `src/weekly_report.py` | `uv run weekly-report`: usage and cost report, rendered into `src/weekly_report.html` |
 | `src/telemetry.py` | Self-observability: `initialize()`s this service against [Spyglass](https://github.com/momonala/spyglass) once per process, exporting `logger`/`metrics` |
 
@@ -107,12 +108,10 @@ Metrics emitted (stat names auto-prefixed `claude-usage-notch-server.{function}.
 
 | Stat | Where | Meaning |
 |------|-------|---------|
-| `post_records.records_inserted` / `records_skipped` | `routes.py` | `/api/records` ingest volume |
+| `post_records.records_inserted` | `routes.py` | `/api/records` ingest volume |
 | `post_quota_snapshots.quota_snapshots_inserted` / `quota_snapshots_skipped` | `routes.py` | `/api/quota_snapshots` ingest volume |
 | `get_analytics.duration` | `routes.py` | `/api/analytics` latency (full-table scan for `lifetime_cost` on every call) |
-| `poll_quota.duration` | `scheduler.py` | `claude -p /usage` subprocess latency |
-| `poll_quota.success` / `claude_error` / `unrecognised_label` / `no_quota_lines_matched` | `scheduler.py` | Quota-poll outcome, including early warning if `claude`'s `/usage` output format drifts |
-| `backfill.success` / `failure` | `scheduler.py` | Daily backfill subprocess outcome |
+| `backfill.records_inserted` | `backfill.py` | New records the daily backfill found on this machine |
 
 ## API
 

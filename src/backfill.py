@@ -1,39 +1,23 @@
-"""Backfill the sync server from all local ~/.claude/projects/**/*.jsonl files.
+"""Backfill usage_records from all local ~/.claude/projects/**/*.jsonl files.
 
-Parses JSONL the same way LocalHistoryReader.swift does, then POSTs records to
-the server in batches. Idempotent — the server dedupes by uuid.
-
-Covers `usage_records` (token counts) only. There is no local source for
-`quota_snapshots` (polled session/weekly quota %) — Claude's JSONL history doesn't
-carry it, so that table only has data from whenever a client started polling and
-pushing it; it can't be backfilled retroactively.
+Parses JSONL the same way LocalHistoryReader.swift does and writes straight to the
+local DB. Idempotent: records are deduped by uuid. `app.py` runs it daily at 05:30 to
+pick up Claude Code sessions on this machine, which no Mac client sees.
 
 Usage:
     uv run backfill
-    uv run backfill --prod                 # PROD_URL from .env
-    uv run backfill --server http://host:5014
 """
 
 import json
-import os
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import as_completed
+import logging
 from pathlib import Path
 
-import orjson
-import requests
-import typer
-from dotenv import load_dotenv
-from tqdm import tqdm
-
-from src.config import FLASK_PORT
+from src.ingest import insert_usage_records
 from src.telemetry import metrics
 
-load_dotenv()
+logger = logging.getLogger(__name__)
 
-_LOCAL_URL = f"http://localhost:{FLASK_PORT}"
-_JSON_HEADERS = {"Content-Type": "application/json"}
-_WORKERS = 4
+_CLAUDE_DIR = Path.home() / ".claude" / "projects"
 _BATCH_SIZE = 1000
 
 
@@ -89,98 +73,33 @@ def parse_assistant_line(raw: str) -> dict | None:
 
 
 def load_all_records(claude_dir: Path) -> list[dict]:
-    files = list(claude_dir.rglob("*.jsonl"))
-    typer.secho(f"Found {len(files)} JSONL files under {claude_dir}", fg=typer.colors.CYAN)
-
     seen: set[str] = set()
     records: list[dict] = []
-
-    for f in files:
+    for f in claude_dir.rglob("*.jsonl"):
         try:
             text = f.read_text(encoding="utf-8")
         except OSError as e:
-            typer.secho(f"  skip {f}: {e}", fg=typer.colors.YELLOW)
+            logger.warning("backfill: skip %s: %s", f, e)
             continue
-
         for line in text.splitlines():
-            line = line.strip()
-            if not line:
-                continue
             record = parse_assistant_line(line)
             if record and record["uuid"] not in seen:
                 seen.add(record["uuid"])
                 records.append(record)
-
     return records
 
 
-def post_batch(server: str, batch: list[dict]) -> tuple[int, int]:
-    url = f"{server.rstrip('/')}/api/records"
-    with requests.Session() as http:
-        resp = http.post(url, data=orjson.dumps(batch), headers=_JSON_HEADERS, timeout=30)
-    resp.raise_for_status()
-    result = resp.json()
-    return result.get("inserted", 0), result.get("skipped", 0)
-
-
-def backfill_cli(
-    server: str = typer.Option(_LOCAL_URL, help="Sync server base URL"),
-    prod: bool = typer.Option(False, "--prod", help="Target production server (PROD_URL from .env)"),
-    workers: int = typer.Option(_WORKERS, help="Concurrent POST threads"),
-) -> None:
-    """Backfill usage DB from local JSONL files."""
-    if prod:
-        prod_url = os.environ.get("PROD_URL")
-        if not prod_url:
-            typer.secho("Error: PROD_URL not set in .env", fg=typer.colors.RED, err=True)
-            raise typer.Exit(1)
-        server = prod_url
-
-    typer.secho(f"Target server: {server}", fg=typer.colors.MAGENTA, bold=True)
-
-    claude_dir = Path.home() / ".claude" / "projects"
-    if not claude_dir.exists():
-        typer.secho(f"Error: {claude_dir} not found", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
-
-    records = load_all_records(claude_dir)
-    typer.secho(f"Parsed {len(records)} unique assistant records", fg=typer.colors.CYAN, bold=True)
-
-    if not records:
-        typer.secho("Nothing to backfill.", fg=typer.colors.YELLOW)
-        return
-
-    batches = [records[i : i + _BATCH_SIZE] for i in range(0, len(records), _BATCH_SIZE)]
-    total_inserted = total_skipped = 0
-
-    try:
-        with (
-            ThreadPoolExecutor(max_workers=workers) as pool,
-            tqdm(total=len(batches), desc="Posting batches", unit="batch") as bar,
-        ):
-            futures = {pool.submit(post_batch, server, batch): batch for batch in batches}
-            for future in as_completed(futures):
-                inserted, skipped = future.result()
-                total_inserted += inserted
-                total_skipped += skipped
-                bar.set_postfix(inserted=total_inserted, skipped=total_skipped)
-                bar.update(1)
-    except requests.RequestException as e:
-        metrics.increment("backfill_failure")
-        typer.secho(f"Error: batch POST failed: {e}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1) from e
-
-    metrics.increment("backfill_success")
-    typer.secho(
-        f"\nDone. Total inserted={total_inserted} skipped={total_skipped}",
-        fg=typer.colors.GREEN,
-        bold=True,
+def backfill() -> int:
+    """Insert every local record the DB doesn't have yet; return how many were new."""
+    records = load_all_records(_CLAUDE_DIR)
+    inserted = sum(
+        insert_usage_records(records[i : i + _BATCH_SIZE])["inserted"]
+        for i in range(0, len(records), _BATCH_SIZE)
     )
+    metrics.increment("records_inserted", inserted)
+    logger.info("backfill: parsed=%d inserted=%d", len(records), inserted)
+    return inserted
 
 
 def main() -> None:
-    typer.run(backfill_cli)
-
-
-if __name__ == "__main__":
-    main()
+    backfill()
