@@ -4,9 +4,11 @@ from datetime import date
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from unittest.mock import Mock
 
 import pytest
 
+from src import routes
 from src.app import create_app
 
 
@@ -651,3 +653,22 @@ def test_analytics_bucket_tokens_sum_to_total(client):
     # totalTokens = input + output + cacheCreate (matches Swift's totalTokens)
     expected = (100 + 50 + 25) + (200 + 100 + 0)
     assert bucket_total == expected
+
+
+def test_post_records_tags_metrics_with_device_and_counts_rejected(client, monkeypatch):
+    metrics = Mock()
+    monkeypatch.setattr(routes, "metrics", metrics)
+    headers = {"X-Device-Name": "Mohit%E2%80%99s%20Air"}
+
+    client.post(
+        "/api/records", json=[_record("uuid-a", "2026-06-09T12:00:00.000Z"), {"no": "uuid"}], headers=headers
+    )
+    client.post("/api/records", json={"not": "an array"}, headers=headers)
+
+    metrics.increment.assert_any_call("records_inserted", 1, tags={"device": "Mohit’s Air"})
+    metrics.increment.assert_any_call(
+        "payload_rejected", 1, tags={"device": "Mohit’s Air", "reason": "missing_uuid"}
+    )
+    metrics.increment.assert_any_call(
+        "payload_rejected", tags={"device": "Mohit’s Air", "reason": "not_array"}
+    )

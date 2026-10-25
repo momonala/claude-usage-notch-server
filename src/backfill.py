@@ -72,31 +72,37 @@ def parse_assistant_line(raw: str) -> dict | None:
     }
 
 
-def load_all_records(claude_dir: Path) -> list[dict]:
+def load_all_records(claude_dir: Path) -> tuple[list[dict], int]:
+    """Parsed records, deduped by uuid, and the number of files that could not be read."""
     seen: set[str] = set()
     records: list[dict] = []
+    unreadable = 0
     for f in claude_dir.rglob("*.jsonl"):
         try:
             text = f.read_text(encoding="utf-8")
         except OSError as e:
             logger.warning("backfill: skip %s: %s", f, e)
+            unreadable += 1
             continue
         for line in text.splitlines():
             record = parse_assistant_line(line)
             if record and record["uuid"] not in seen:
                 seen.add(record["uuid"])
                 records.append(record)
-    return records
+    return records, unreadable
 
 
+@metrics.timed("duration")
 def backfill() -> int:
     """Insert every local record the DB doesn't have yet; return how many were new."""
-    records = load_all_records(_CLAUDE_DIR)
+    records, unreadable = load_all_records(_CLAUDE_DIR)
     inserted = sum(
         insert_usage_records(records[i : i + _BATCH_SIZE])["inserted"]
         for i in range(0, len(records), _BATCH_SIZE)
     )
     metrics.increment("records_inserted", inserted)
+    metrics.increment("records_parsed", len(records))
+    metrics.increment("files_unreadable", unreadable)
     logger.info("backfill: parsed=%d inserted=%d", len(records), inserted)
     return inserted
 

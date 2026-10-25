@@ -16,15 +16,17 @@ logger = logging.getLogger(__name__)
 
 
 def insert_usage_records(items: list) -> dict:
-    """Insert new records (idempotent by uuid), bump the lifetime cost, and return inserted/skipped counts."""
+    """Insert new records (idempotent by uuid), bump the lifetime cost, and return inserted/skipped/invalid counts."""
     rows = {}
+    invalid = 0
     for item in items:
         if not isinstance(item, dict) or not item.get("uuid"):
             logger.warning("insert_usage_records: skipping record with missing uuid")
+            invalid += 1
             continue
         rows[item["uuid"]] = UsageRecord.row_from_json(item)
     if not rows:
-        return {"inserted": 0, "skipped": 0}
+        return {"inserted": 0, "skipped": 0, "invalid": invalid}
 
     with session_scope() as session:
         existing_uuids = set(session.scalars(select(UsageRecord.uuid).where(UsageRecord.uuid.in_(rows))))
@@ -47,4 +49,4 @@ def insert_usage_records(items: list) -> dict:
                 )
                 stats.last_updated = datetime.now(timezone.utc)
 
-    return {"inserted": len(new_rows), "skipped": len(rows) - len(new_rows)}
+    return {"inserted": len(new_rows), "skipped": len(rows) - len(new_rows), "invalid": invalid}

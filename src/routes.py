@@ -15,6 +15,7 @@ import logging
 import threading
 from datetime import datetime
 from datetime import timedelta
+from urllib.parse import unquote
 
 from flask import Blueprint
 from flask import jsonify
@@ -47,6 +48,10 @@ def _filter_since(stmt, column, since_raw: str | None):
     if not since_raw:
         return stmt
     return stmt.where(column >= parse_timestamp(since_raw))
+
+
+def _device() -> str:
+    return unquote(request.headers.get("X-Device-Name", "")) or "unknown"
 
 
 def _json_array(endpoint: str):
@@ -94,18 +99,26 @@ def health():
 
 
 @bp.post("/api/records")
+@metrics.timed("duration")
 def post_records():
+    tags = {"device": _device()}
     payload = _json_array("POST /api/records")
     if payload is None:
+        metrics.increment("payload_rejected", tags={**tags, "reason": "not_array"})
         return jsonify({"error": "expected a JSON array of records"}), 400
 
     counts = insert_usage_records(payload)
+    invalid = counts.pop("invalid")
     logger.debug("POST /api/records: inserted=%d skipped=%d", counts["inserted"], counts["skipped"])
-    metrics.increment("records_inserted", counts["inserted"])
+    metrics.increment("records_inserted", counts["inserted"], tags=tags)
+    metrics.increment("records_skipped", counts["skipped"], tags=tags)
+    if invalid:
+        metrics.increment("payload_rejected", invalid, tags={**tags, "reason": "missing_uuid"})
     return jsonify(counts)
 
 
 @bp.get("/api/records")
+@metrics.timed("duration")
 def get_records():
     since_raw = request.args.get("since")
     try:
@@ -124,9 +137,13 @@ def get_records():
 
 
 @bp.post("/api/quota_snapshots")
+@metrics.timed("duration")
 def post_quota_snapshots():
+    tags = {"device": _device()}
+    metrics.increment("received", tags=tags)
     payload = _json_array("POST /api/quota_snapshots")
     if payload is None:
+        metrics.increment("payload_rejected", tags={**tags, "reason": "not_array"})
         return jsonify({"error": "expected a JSON array of records"}), 400
 
     # Keyed by (window_type, timestamp) — the table's natural composite key — so a
@@ -136,32 +153,34 @@ def post_quota_snapshots():
     for item in payload:
         if not isinstance(item, dict) or not item.get("window_type") or not item.get("timestamp"):
             logger.warning("POST /api/quota_snapshots: skipping record missing window_type/timestamp")
+            metrics.increment("payload_rejected", tags={**tags, "reason": "missing_field"})
             continue
         try:
             data = QuotaSnapshot.row_from_json(item)
         except ValueError:
             logger.warning("POST /api/quota_snapshots: skipping record with invalid timestamp")
+            metrics.increment("payload_rejected", tags={**tags, "reason": "invalid_timestamp"})
             continue
         rows[(data["window_type"], data["timestamp"])] = data
 
     new_rows = [row for _, row in sorted(rows.items(), key=lambda item: item[0][1]) if _claim_quota_row(row)]
-    if not new_rows:
-        return jsonify({"inserted": 0, "skipped": len(rows)})
-
-    with session_scope() as session:
-        stmt = sqlite_insert(QuotaSnapshot).on_conflict_do_nothing(
-            index_elements=["window_type", "timestamp"]
-        )
-        result = session.connection().execute(stmt, new_rows)
-
-    counts = _insert_counts(result, len(new_rows))
+    counts = {"inserted": 0, "skipped": 0}
+    if new_rows:
+        with session_scope() as session:
+            stmt = sqlite_insert(QuotaSnapshot).on_conflict_do_nothing(
+                index_elements=["window_type", "timestamp"]
+            )
+            result = session.connection().execute(stmt, new_rows)
+        counts = _insert_counts(result, len(new_rows))
     counts["skipped"] += len(rows) - len(new_rows)
     logger.debug("POST /api/quota_snapshots: inserted=%d skipped=%d", counts["inserted"], counts["skipped"])
-    metrics.increment("quota_snapshots_inserted", counts["inserted"])
+    metrics.increment("quota_snapshots_inserted", counts["inserted"], tags=tags)
+    metrics.increment("quota_snapshots_skipped", counts["skipped"], tags=tags)
     return jsonify(counts)
 
 
 @bp.get("/api/quota_snapshots")
+@metrics.timed("duration")
 def get_quota_snapshots():
     since_raw = request.args.get("since")
     window_type = request.args.get("window_type")
