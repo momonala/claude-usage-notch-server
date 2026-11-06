@@ -222,7 +222,7 @@ def get_analytics():
     """
     keys = ("session_since", "session_cost_since", "weekly_since", "month_since", "lookback_since")
     raw = [request.args.get(k) for k in keys]
-    missing = [k for k, v in zip(keys, raw) if not v]
+    missing = [k for k, v in zip(keys, raw, strict=False) if not v]
     if missing:
         return jsonify({"error": f"missing required params: {', '.join(missing)}"}), 400
     granularity = request.args.get("granularity", "day")

@@ -6,8 +6,8 @@ stored only when the value changes plus a periodic heartbeat (see `routes.py`).
 The notch app POSTs both and reads aggregates back from /api/analytics.
 """
 
+from datetime import UTC
 from datetime import datetime
-from datetime import timezone
 from typing import ClassVar
 
 from sqlalchemy import DateTime
@@ -37,8 +37,8 @@ def format_timestamp(value: datetime) -> str:
     not round-trip.
     """
     if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    utc = value.astimezone(timezone.utc)
+        value = value.replace(tzinfo=UTC)
+    utc = value.astimezone(UTC)
     return utc.strftime("%Y-%m-%dT%H:%M:%S.") + f"{utc.microsecond // 1000:03d}Z"
 
 
@@ -50,7 +50,7 @@ class UsageStats(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     lifetime_cost: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     last_updated: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime, default=lambda: datetime.now(UTC), nullable=False
     )
 
 
@@ -74,9 +74,7 @@ class QuotaSnapshot(Base):
     percent_used: Mapped[float] = mapped_column(Float, nullable=False)
     resets_at: Mapped[datetime | None] = mapped_column(DateTime)
     source: Mapped[str | None] = mapped_column(String)  # device hostname; multi-laptop debugging only
-    ingested_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
-    )
+    ingested_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
 
     __table_args__ = (Index("idx_quota_snapshots_timestamp", "timestamp"),)
 
@@ -129,9 +127,7 @@ class UsageRecord(Base):
     ephemeral_5m_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     web_searches: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     web_fetches: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    ingested_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
-    )
+    ingested_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
 
     __table_args__ = (Index("idx_usage_records_timestamp", "timestamp"),)
 

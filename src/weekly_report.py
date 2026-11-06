@@ -12,10 +12,10 @@ import statistics
 from collections import Counter
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import UTC
 from datetime import date
 from datetime import datetime
 from datetime import timedelta
-from datetime import timezone
 from pathlib import Path
 
 import typer
@@ -88,7 +88,7 @@ def week_start(day: date) -> date:
 
 
 def parse_ts(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "")).replace(tzinfo=timezone.utc)
+    return datetime.fromisoformat(value.replace("Z", "")).replace(tzinfo=UTC)
 
 
 _REQUESTS_SQL = """
@@ -292,7 +292,8 @@ def sessions(requests: list[Request]) -> dict:
 
     edges = [0, *SESSION_BUCKETS_USD]
     buckets = [
-        {"from": lo, "to": hi, "count": 0, "usd": 0.0} for lo, hi in zip(edges, SESSION_BUCKETS_USD + [None])
+        {"from": lo, "to": hi, "count": 0, "usd": 0.0}
+        for lo, hi in zip(edges, SESSION_BUCKETS_USD + [None], strict=False)
     ]
     for s in by_session.values():
         bucket = next(b for b in buckets if b["to"] is None or s["usd"] < b["to"])

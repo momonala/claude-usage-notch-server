@@ -7,9 +7,9 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
-from datetime import timezone
 from typing import Protocol
 
 from src.models import QuotaSnapshot
@@ -184,7 +184,7 @@ def _build_series(
 
     cost_by: dict[datetime, float] = defaultdict(float)
     sessions_by: dict[datetime, set] = defaultdict(set)
-    for r, cost in zip(records, costs):
+    for r, cost in zip(records, costs, strict=False):
         slot = key(r.timestamp)
         cost_by[slot] += cost
         if r.session_id:
@@ -244,10 +244,10 @@ def quantize_reset(value: datetime) -> datetime:
     # Values read back from SQLite are naive-but-UTC; `.timestamp()` would read a
     # naive datetime as *local* time and shift every reset by the host's UTC offset.
     if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
+        value = value.replace(tzinfo=UTC)
     epoch = value.timestamp()
     snapped = round(epoch / _RESET_QUANTUM_SECONDS) * _RESET_QUANTUM_SECONDS
-    return datetime.fromtimestamp(snapped, tz=timezone.utc)
+    return datetime.fromtimestamp(snapped, tz=UTC)
 
 
 def _quota_history(records: list[QuotaRow]) -> list[dict]:
@@ -318,7 +318,7 @@ class AnalyticsRequest:
 
 
 def compute_analytics(req: AnalyticsRequest) -> dict:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     # `session_records` spans a wide 24h window so the session_buckets chart can
     # show the 5h rolling window resetting several times. The "Session" cost
@@ -373,7 +373,9 @@ def compute_analytics(req: AnalyticsRequest) -> dict:
     # "Today" is a calendar-day figure independent of the series granularity.
     today = now.date()
     today_cost = sum(
-        cost for r, cost in zip(req.lookback_records, lookback_costs) if r.timestamp.date() == today
+        cost
+        for r, cost in zip(req.lookback_records, lookback_costs, strict=False)
+        if r.timestamp.date() == today
     )
 
     return {

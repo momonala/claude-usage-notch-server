@@ -1,9 +1,9 @@
 """Tests for the records API: health, upsert idempotency, and time filtering."""
 
+from datetime import UTC
 from datetime import date
 from datetime import datetime
 from datetime import timedelta
-from datetime import timezone
 from unittest.mock import Mock
 
 import pytest
@@ -248,7 +248,7 @@ def test_analytics_returns_expected_shape_on_empty_db(client):
     assert isinstance(body["daily_sessions"], list)
     # Daily series spans lookback_since -> today (UTC), capped at 30 days.
     lookback_since = date(2026, 5, 13)
-    expected_days = min((datetime.now(timezone.utc).date() - lookback_since).days + 1, 30)
+    expected_days = min((datetime.now(UTC).date() - lookback_since).days + 1, 30)
     assert len(body["daily_cost"]) == expected_days
     assert len(body["daily_sessions"]) == expected_days
 
@@ -527,7 +527,7 @@ def test_analytics_today_cost_anchored_to_current_date(client):
     # "All" period cuts off at the epoch. today_cost and the day columns must
     # still resolve to the current date, not days starting in 1970. Regression
     # for the Today pill changing across lookback periods.
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     ts = now.strftime("%Y-%m-%dT%H:%M:%S.000Z")
     client.post(
         "/api/records",
@@ -561,7 +561,7 @@ def test_analytics_today_cost_anchored_to_current_date(client):
 
 def test_analytics_hour_granularity_returns_24_buckets(client):
     # 1D view: spend/sessions roll up per hour over the last 24 hours.
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     ts = now.strftime("%Y-%m-%dT%H:%M:%S.000Z")
     client.post(
         "/api/records",
@@ -592,7 +592,7 @@ def test_analytics_hour_granularity_returns_24_buckets(client):
 
 def test_analytics_month_granularity_spans_record_months(client):
     # "All" view: spend/sessions roll up per calendar month from the first record.
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     two_months_ago = (now.replace(day=1) - timedelta(days=40)).strftime("%Y-%m-%dT12:00:00.000Z")
     client.post(
         "/api/records",

@@ -1,8 +1,8 @@
 """Write usage records to the DB; shared by `POST /api/records` and the backfill."""
 
 import logging
+from datetime import UTC
 from datetime import datetime
-from datetime import timezone
 
 from sqlalchemy import select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -47,6 +47,6 @@ def insert_usage_records(items: list) -> dict:
                     )
                     for d in new_rows
                 )
-                stats.last_updated = datetime.now(timezone.utc)
+                stats.last_updated = datetime.now(UTC)
 
     return {"inserted": len(new_rows), "skipped": len(rows) - len(new_rows), "invalid": invalid}
