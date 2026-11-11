@@ -118,7 +118,6 @@ def post_records():
 
 
 @bp.get("/api/records")
-@metrics.timed("duration")
 def get_records():
     since_raw = request.args.get("since")
     try:
@@ -175,12 +174,10 @@ def post_quota_snapshots():
     counts["skipped"] += len(rows) - len(new_rows)
     logger.debug("POST /api/quota_snapshots: inserted=%d skipped=%d", counts["inserted"], counts["skipped"])
     metrics.increment("quota_snapshots_inserted", counts["inserted"], tags=tags)
-    metrics.increment("quota_snapshots_skipped", counts["skipped"], tags=tags)
     return jsonify(counts)
 
 
 @bp.get("/api/quota_snapshots")
-@metrics.timed("duration")
 def get_quota_snapshots():
     since_raw = request.args.get("since")
     window_type = request.args.get("window_type")
