@@ -46,22 +46,18 @@ def test_weeks_count_each_request_once_and_split_work_from_personal(post, report
         "/api/records",
         json=[
             _record(
-                "a",
+                "req_1",
                 "2026-09-23T10:00:00Z",
-                request_id="req_1",
                 cwd="/u/code/rev-ops/ingestion",
                 **MILLION_EACH,
             ),
             _record(
-                "b",
+                "req_1",
                 "2026-09-23T10:00:01Z",
-                request_id="req_1",
                 cwd="/u/code/rev-ops/ingestion",
                 **MILLION_EACH,
             ),
-            _record(
-                "c", "2026-10-06T10:00:00Z", request_id="req_2", cwd="/u/code/projects/notch", **MILLION_EACH
-            ),
+            _record("req_2", "2026-10-06T10:00:00Z", cwd="/u/code/projects/notch", **MILLION_EACH),
         ],
     )
 
@@ -83,8 +79,8 @@ def test_weekly_limit_counts_early_resets(post, report):
     post(
         "/api/records",
         json=[
-            _record("a", "2026-09-01T10:00:00Z", request_id="req_1", **MILLION_EACH),
-            _record("b", "2026-09-03T10:00:00Z", request_id="req_2", **MILLION_EACH),
+            _record("req_1", "2026-09-01T10:00:00Z", **MILLION_EACH),
+            _record("req_2", "2026-09-03T10:00:00Z", **MILLION_EACH),
         ],
     )
     reset = "2026-09-06T02:00:00Z"
@@ -124,8 +120,8 @@ def test_weekly_limit_keeps_windows_apart_within_one_hour(post, report):
     post(
         "/api/records",
         json=[
-            _record("a", "2026-09-01T10:00:00Z", request_id="req_1", **MILLION_EACH),
-            _record("b", "2026-09-07T10:00:00Z", request_id="req_2", **MILLION_EACH),
+            _record("req_1", "2026-09-01T10:00:00Z", **MILLION_EACH),
+            _record("req_2", "2026-09-07T10:00:00Z", **MILLION_EACH),
         ],
     )
     post(
@@ -144,7 +140,7 @@ def test_weekly_limit_keeps_windows_apart_within_one_hour(post, report):
 
 
 def test_since_drops_limit_windows_that_start_before_it(post, tmp_path):
-    post("/api/records", json=[_record("a", "2026-09-04T10:00:00Z", request_id="req_1", **MILLION_EACH)])
+    post("/api/records", json=[_record("req_1", "2026-09-04T10:00:00Z", **MILLION_EACH)])
     post(
         "/api/quota_snapshots",
         json=[_quota("weekly", "2026-09-04T12:00:00Z", percent_used=0.30, resets_at="2026-09-06T02:00:00Z")],

@@ -22,6 +22,7 @@ import typer
 
 from src.config import DB_PATH
 from src.config import REPORT_WORK_PATHS
+from src.models import project_from_cwd
 
 TEMPLATE_PATH = Path(__file__).with_name("weekly_report.html")
 
@@ -92,17 +93,10 @@ def parse_ts(value: str) -> datetime:
 
 
 _REQUESTS_SQL = """
-WITH one_row_per_request AS (
-    SELECT *, ROW_NUMBER() OVER (
-        PARTITION BY coalesce(request_id, uuid) ORDER BY output_tokens DESC, timestamp DESC
-    ) AS rn
-    FROM usage_records
-    WHERE :since IS NULL OR timestamp >= :since
-)
-SELECT timestamp, session_id, cwd, project, model, attribution_skill,
+SELECT timestamp, session_id, cwd, model, attribution_skill,
        input_tokens, output_tokens, cache_creation_tokens, ephemeral_1h_tokens, cache_read_tokens
-FROM one_row_per_request
-WHERE rn = 1
+FROM usage_records
+WHERE :since IS NULL OR timestamp >= :since
 ORDER BY timestamp
 """
 
@@ -146,7 +140,7 @@ def to_request(row: sqlite3.Row, work_paths: list[str]) -> Request:
     return Request(
         at=parse_ts(row["timestamp"]),
         session_id=row["session_id"],
-        project=row["project"],
+        project=project_from_cwd(row["cwd"]),
         model=row["model"],
         skill=row["attribution_skill"],
         work=is_work(row["cwd"], work_paths),

@@ -4,12 +4,12 @@
 
 A store for Claude Code usage records. The [ClaudeUsageNotch](https://github.com/momonala/ClaudeUsageNotch)
 macOS app parses `~/.claude/projects/**/*.jsonl`, extracts one record per `assistant`
-turn, and POSTs them here. The app's analytics chart reads them back. This lets usage
+line, and POSTs them here. Claude Code writes one line per content block of a response,
+each repeating that request's token usage, so the server stores one row per `request_id`. The app's analytics chart reads them back. This lets usage
 history outlive the ~30-day JSONL retention and loads the chart faster than re-parsing
 local files.
 
-It stores raw token counts and serves them back via `/api/records`, and also aggregates
-them on demand for the chart via `/api/analytics` (cost, cache-hit rate, model/project/
+It aggregates them on demand for the chart via `/api/analytics` (cost, cache-hit rate, model/project/
 skill breakdowns, daily series, time buckets). The aggregation lives in `src/analytics.py`
 and previously ran in Swift.
 
@@ -72,22 +72,21 @@ skills.
 ```
 ClaudeUsageNotch app ──POST /api/records──► Flask API ──► SQLite (usage_records)
         ▲                                       │
-        ├──────────GET /api/records?since=──────┤
         └──────────GET /api/analytics──────────►┘  (aggregated in src/analytics.py)
 ```
 
-The schema is a single table created on startup via SQLAlchemy `create_all` — no
-migration tooling, since it's a single-user store with no reverse-compatibility needs.
+Tables are created on startup via SQLAlchemy `create_all`. There's no migration tooling:
+it's a single-user store, and the rare schema change ships as a one-off script.
 
 | File | Role |
 |------|------|
 | `src/app.py` | Flask app factory + entry point (`uv run app`); schedules the daily 05:30 backfill in-process via APScheduler |
-| `src/routes.py` | The four endpoints below |
-| `src/models.py` | `UsageRecord` model + JSON (de)serialization |
+| `src/routes.py` | The endpoints below |
+| `src/models.py` | `UsageRecord` / `QuotaSnapshot` / `UsageStats` models + JSON parsing |
 | `src/analytics.py` | On-demand aggregation for `/api/analytics` (cost, breakdowns, buckets) |
 | `src/database.py` | Engine, `session_scope`, `init_db` |
 | `src/config.py` | All config (read from `pyproject.toml`) + `DATABASE_URL`; CLI for install scripts |
-| `src/ingest.py` | `insert_usage_records`: dedup by uuid, insert, bump lifetime cost. Shared by `POST /api/records` and the backfill |
+| `src/ingest.py` | `insert_usage_records`: collapse lines to one row per request, upsert, move lifetime cost by the change. Shared by `POST /api/records` and the backfill |
 | `src/backfill.py` | `uv run backfill`: load this machine's `~/.claude/projects/**/*.jsonl` straight into the DB |
 | `src/weekly_report.py` | `uv run weekly-report`: usage and cost report, rendered into `src/weekly_report.html` |
 | `src/telemetry.py` | Self-observability: `initialize()`s this service against [Spyglass](https://github.com/momonala/spyglass) once per process, exporting `logger`/`metrics` |
@@ -118,32 +117,25 @@ Metrics emitted (stat names auto-prefixed `claude-usage-notch-server.{function}.
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/status` | GET | Health check → `{"status": "ok"}` |
-| `/api/records` | POST | Upsert a batch (idempotent by `uuid`) |
-| `/api/records` | GET | Records with `timestamp >= since` |
+| `/api/records` | POST | Upsert a batch of JSONL lines as one row per request (idempotent by `request_id`) |
 | `/api/quota_snapshots` | POST | Upsert a batch of polled quota readings (idempotent by `window_type`+`timestamp`) |
-| `/api/quota_snapshots` | GET | Readings with `timestamp >= since`, optionally filtered by `window_type` |
 | `/api/analytics` | GET | Pre-aggregated chart data for the session/weekly/month + lookback windows |
 
 ### POST /api/records
 
-Body is a JSON **array** of records. Upsert is `INSERT … ON CONFLICT(uuid) DO NOTHING`,
-so re-posting a batch is safe.
+Body is a JSON **array** of JSONL-derived records. Lines sharing a `request_id` are
+collapsed to the one with the most `output_tokens` (early streamed lines carry a partial
+count) and the earliest `timestamp`. A stored request is only updated when a later
+line has more output, so re-posting a batch is safe. Records without a `request_id`
+(Claude Code's zero-token `<synthetic>` lines) are skipped.
 
 ```bash
 curl -X POST http://localhost:5014/api/records \
   -H 'Content-Type: application/json' \
-  -d '[{"uuid":"b477...","session_id":"d8e2...","timestamp":"2026-06-09T12:34:54.292Z","cwd":"/Users/me/code/Proj","project":"Proj","model":"claude-sonnet-4-6","is_sidechain":false,"input_tokens":2,"output_tokens":183,"cache_creation_tokens":7684,"cache_read_tokens":12081,"ephemeral_1h_tokens":7684,"ephemeral_5m_tokens":0,"web_searches":0,"web_fetches":0}]'
+  -d '[{"request_id":"req_011C...","session_id":"d8e2...","timestamp":"2026-06-09T12:34:54.292Z","cwd":"/Users/me/code/Proj","git_branch":"main","model":"claude-sonnet-4-6","is_sidechain":false,"input_tokens":2,"output_tokens":183,"cache_creation_tokens":7684,"cache_read_tokens":12081,"ephemeral_1h_tokens":7684}]'
 ```
 
-Response: `{"inserted": N, "skipped": M}` (skipped = already-present uuids).
-
-### GET /api/records
-
-```bash
-curl 'http://localhost:5014/api/records?since=2026-06-01T00:00:00Z'
-```
-
-Returns a JSON array ordered by `timestamp`. Omit `since` for everything.
+Response: `{"inserted": N, "updated": U, "skipped": M}`.
 
 ### POST /api/quota_snapshots
 
@@ -159,18 +151,10 @@ since the last stored one for that window; the rest count as `skipped`.
 ```bash
 curl -X POST http://localhost:5014/api/quota_snapshots \
   -H 'Content-Type: application/json' \
-  -d '[{"window_type":"session","timestamp":"2026-06-16T12:34:00.000Z","percent_used":0.42,"resets_at":"2026-06-16T17:00:00.000Z","source":"MacBook-Pro"}]'
+  -d '[{"window_type":"session","timestamp":"2026-06-16T12:34:00.000Z","percent_used":0.42,"resets_at":"2026-06-16T17:00:00.000Z"}]'
 ```
 
 Response: `{"inserted": N, "skipped": M}`.
-
-### GET /api/quota_snapshots
-
-```bash
-curl 'http://localhost:5014/api/quota_snapshots?window_type=session&since=2026-06-01T00:00:00Z'
-```
-
-Returns a JSON array ordered by `timestamp`. `window_type` and `since` are both optional.
 
 ### GET /api/analytics
 
@@ -209,23 +193,20 @@ columns only). See `src/analytics.py`.
 
 ### Record schema
 
-`uuid` (primary key) and `timestamp` are required; everything else is nullable or
-defaults to 0. Timestamps are ISO8601, serialized back with a trailing `Z`.
+One row per Claude API request. `request_id` (primary key) and `timestamp` are
+required; everything else is nullable or defaults to 0. `timestamp` is the request's
+first line. The project shown in breakdowns is `cwd`'s last path component.
 
 ```
-uuid, request_id, session_id, parent_uuid, timestamp, cwd, project, git_branch,
-model, version, entrypoint, attribution_skill, is_sidechain, stop_reason,
-service_tier, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
-ephemeral_1h_tokens, ephemeral_5m_tokens, web_searches, web_fetches
+request_id, timestamp, session_id, cwd, git_branch, model, attribution_skill,
+is_sidechain, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
+ephemeral_1h_tokens
 ```
-
-`ingested_at` is server-owned and not part of the API.
 
 ### Quota snapshot schema
 
-`window_type` + `timestamp` form the composite primary key. `percent_used` is
-required (0...1+); `resets_at` and `source` (the polling device's hostname) are
-optional. `ingested_at` is server-owned.
+`window_type` + `timestamp` form the composite primary key (`WITHOUT ROWID`).
+`percent_used` is required (0...1+); `resets_at` is optional.
 
 ```
 window_type, timestamp, percent_used, resets_at, source

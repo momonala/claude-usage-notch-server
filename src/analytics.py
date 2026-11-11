@@ -15,6 +15,7 @@ from typing import Protocol
 from src.models import QuotaSnapshot
 from src.models import UsageRecord
 from src.models import format_timestamp
+from src.models import project_from_cwd
 
 # Aggregation reads only these scalars, so the route selects columns rather than ORM
 # entities. Entity hydration allocates ~25 Python objects per row; on a threaded server
@@ -26,14 +27,12 @@ class UsageRow(Protocol):
     timestamp: datetime
     session_id: str
     model: str
-    project: str
+    cwd: str
     attribution_skill: str | None
     input_tokens: int
     output_tokens: int
     cache_creation_tokens: int
     cache_read_tokens: int
-    web_searches: int
-    web_fetches: int
 
 
 class QuotaRow(Protocol):
@@ -329,11 +328,10 @@ def compute_analytics(req: AnalyticsRequest) -> dict:
     weekly_cost = sum(estimated_cost(r) for r in req.weekly_records)
     month_cost = sum(estimated_cost(r) for r in req.month_records)
 
-    # Token breakdowns, cache, model/project/skill mix, and web counts are all
+    # Token breakdowns, cache, and model/project/skill mix are all
     # labeled with the selected lookback period in the UI, so they aggregate over
     # the lookback window — not a fixed 7-day or 30-day window.
     total_input = total_output = total_cache_create = total_cache_read = 0
-    total_web_searches = total_web_fetches = 0
     model_tokens: dict[str, int] = defaultdict(int)
     project_tokens: dict[str, int] = defaultdict(int)
     skill_tokens: dict[str, int] = defaultdict(int)
@@ -343,12 +341,10 @@ def compute_analytics(req: AnalyticsRequest) -> dict:
         total_output += r.output_tokens
         total_cache_create += r.cache_creation_tokens
         total_cache_read += r.cache_read_tokens
-        total_web_searches += r.web_searches
-        total_web_fetches += r.web_fetches
 
         tok = _total_tokens(r)
         model_tokens[r.model] += tok
-        project_tokens[r.project] += tok
+        project_tokens[project_from_cwd(r.cwd)] += tok
         if r.attribution_skill:
             skill_tokens[r.attribution_skill] += tok
 
@@ -405,8 +401,6 @@ def compute_analytics(req: AnalyticsRequest) -> dict:
         "weekly_quota_history": _quota_history(req.weekly_quota),
         "credit_quota_history": _quota_history(req.month_quota),
         "hourly_activity": _build_hourly_activity(req.lookback_records, req.lookback_cutoff, now),
-        "total_web_searches": total_web_searches,
-        "total_web_fetches": total_web_fetches,
         # 24h of minute buckets: the session window is 5h, but the app charts the
         # last 24h so the window can be seen resetting several times across the span.
         "session_buckets": _make_buckets(req.session_records, req.session_cutoff, "minute", 24 * 60),

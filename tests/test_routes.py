@@ -1,4 +1,4 @@
-"""Tests for the records API: health, upsert idempotency, and time filtering."""
+"""Tests for the records, quota and analytics API."""
 
 from datetime import UTC
 from datetime import date
@@ -7,39 +7,64 @@ from datetime import timedelta
 from unittest.mock import Mock
 
 import pytest
+from sqlalchemy import select
 
 from src import routes
+from src.analytics import estimated_cost_fields
 from src.app import create_app
+from src.database import session_scope
+from src.models import QuotaSnapshot
+from src.models import UsageRecord
+from src.models import UsageStats
+from src.models import format_timestamp
 
 
-def _record(uuid: str, timestamp: str, **overrides) -> dict:
+def _record(request_id: str, timestamp: str, **overrides) -> dict:
     base = {
-        "uuid": uuid,
-        "request_id": "req_011C",
+        "request_id": request_id,
         "session_id": "d8e25c22",
-        "parent_uuid": None,
         "timestamp": timestamp,
         "cwd": "/Users/mnalavadi/code/projects/ClaudeUsageNotch",
-        "project": "ClaudeUsageNotch",
         "git_branch": "main",
         "model": "claude-sonnet-4-6",
-        "version": "2.1.169",
-        "entrypoint": "cli",
         "attribution_skill": "swift",
         "is_sidechain": False,
-        "stop_reason": "end_turn",
-        "service_tier": "standard",
         "input_tokens": 2,
         "output_tokens": 183,
         "cache_creation_tokens": 7684,
         "cache_read_tokens": 12081,
         "ephemeral_1h_tokens": 7684,
-        "ephemeral_5m_tokens": 0,
-        "web_searches": 0,
-        "web_fetches": 0,
     }
     base.update(overrides)
     return base
+
+
+def _usage_rows() -> list:
+    with session_scope() as session:
+        return session.execute(select(UsageRecord).order_by(UsageRecord.timestamp)).scalars().all()
+
+
+def _quota_rows() -> list[tuple[str, str]]:
+    with session_scope() as session:
+        rows = session.execute(
+            select(QuotaSnapshot.window_type, QuotaSnapshot.timestamp).order_by(QuotaSnapshot.timestamp)
+        ).all()
+        return [(w, format_timestamp(t)) for w, t in rows]
+
+
+def _lifetime_cost() -> float:
+    with session_scope() as session:
+        return session.get(UsageStats, 1).lifetime_cost
+
+
+def _cost(record: dict) -> float:
+    return estimated_cost_fields(
+        record["model"],
+        record["input_tokens"],
+        record["cache_creation_tokens"],
+        record["output_tokens"],
+        record["cache_read_tokens"],
+    )
 
 
 @pytest.fixture
@@ -56,60 +81,72 @@ def test_health(client):
     assert resp.get_json() == {"status": "ok"}
 
 
-def test_post_inserts_and_get_returns(client):
+def test_post_inserts_one_row_per_request(client):
     records = [
-        _record("uuid-a", "2026-06-09T12:00:00.000Z"),
-        _record("uuid-b", "2026-06-09T13:00:00.000Z"),
+        _record("req-a", "2026-06-09T12:00:00.000Z"),
+        _record("req-b", "2026-06-09T13:00:00.000Z"),
     ]
     resp = client.post("/api/records", json=records)
     assert resp.status_code == 200
-    assert resp.get_json() == {"inserted": 2, "skipped": 0}
-
-    resp = client.get("/api/records")
-    body = resp.get_json()
-    assert len(body) == 2
-    assert {r["uuid"] for r in body} == {"uuid-a", "uuid-b"}
-    # Round-trips a representative field and the timestamp format.
-    assert body[0]["timestamp"] == "2026-06-09T12:00:00.000Z"
-    assert body[0]["cache_creation_tokens"] == 7684
+    assert resp.get_json() == {"inserted": 2, "updated": 0, "skipped": 0}
+    assert [r.request_id for r in _usage_rows()] == ["req-a", "req-b"]
+    assert _lifetime_cost() == pytest.approx(_cost(records[0]) + _cost(records[1]))
 
 
-def test_post_is_idempotent_by_uuid(client):
-    rec = _record("uuid-dup", "2026-06-09T12:00:00.000Z")
-    assert client.post("/api/records", json=[rec]).get_json() == {"inserted": 1, "skipped": 0}
-    # Re-posting the same uuid is a no-op.
-    assert client.post("/api/records", json=[rec]).get_json() == {"inserted": 0, "skipped": 1}
-    assert len(client.get("/api/records").get_json()) == 1
+def test_post_collapses_lines_of_one_request_keeping_most_output_and_first_time(client):
+    partial = _record("req-a", "2026-06-09T12:00:00.000Z", output_tokens=3)
+    full = _record("req-a", "2026-06-09T12:00:40.000Z", output_tokens=153)
+    assert client.post("/api/records", json=[partial, full]).get_json() == {
+        "inserted": 1,
+        "updated": 0,
+        "skipped": 0,
+    }
+
+    [row] = _usage_rows()
+    assert row.output_tokens == 153
+    assert format_timestamp(row.timestamp) == "2026-06-09T12:00:00.000Z"
+    assert _lifetime_cost() == pytest.approx(_cost(full))
 
 
-def test_get_since_filters_by_timestamp(client):
-    client.post(
-        "/api/records",
-        json=[
-            _record("old", "2026-06-01T00:00:00.000Z"),
-            _record("new", "2026-06-10T00:00:00.000Z"),
-        ],
-    )
-    body = client.get("/api/records?since=2026-06-05T00:00:00Z").get_json()
-    assert [r["uuid"] for r in body] == ["new"]
+def test_later_post_with_more_output_updates_the_request_and_moves_cost_by_the_difference(client):
+    partial = _record("req-a", "2026-06-09T12:00:00.000Z", output_tokens=3)
+    full = _record("req-a", "2026-06-09T12:00:40.000Z", output_tokens=153)
+    client.post("/api/records", json=[partial])
+
+    assert client.post("/api/records", json=[full]).get_json() == {"inserted": 0, "updated": 1, "skipped": 0}
+    [row] = _usage_rows()
+    assert row.output_tokens == 153
+    assert format_timestamp(row.timestamp) == "2026-06-09T12:00:00.000Z"
+    assert _lifetime_cost() == pytest.approx(_cost(full))
+
+    # A retry or another machine re-sending the partial line changes nothing.
+    assert client.post("/api/records", json=[partial]).get_json() == {
+        "inserted": 0,
+        "updated": 0,
+        "skipped": 1,
+    }
+    assert _usage_rows()[0].output_tokens == 153
+    assert _lifetime_cost() == pytest.approx(_cost(full))
+
+
+def test_post_skips_records_without_request_id(client):
+    resp = client.post("/api/records", json=[_record("", "2026-06-09T12:00:00.000Z"), {"no": "request_id"}])
+    assert resp.get_json() == {"inserted": 0, "updated": 0, "skipped": 0}
+    assert _usage_rows() == []
 
 
 def test_post_rejects_non_array(client):
-    assert client.post("/api/records", json={"uuid": "x"}).status_code == 400
-
-
-def test_get_rejects_invalid_since(client):
-    assert client.get("/api/records?since=not-a-timestamp").status_code == 400
+    assert client.post("/api/records", json={"request_id": "x"}).status_code == 400
 
 
 def test_post_large_batch_stays_under_variable_limit(client):
     # A first sync can push the whole history at once; this must not exceed
-    # SQLite's bound-variable ceiling (regression test for the chunked upsert).
-    records = [_record(f"uuid-{i}", "2026-06-09T12:00:00.000Z") for i in range(1500)]
+    # SQLite's bound-variable ceiling.
+    records = [_record(f"req-{i}", "2026-06-09T12:00:00.000Z") for i in range(1500)]
     resp = client.post("/api/records", json=records)
     assert resp.status_code == 200
-    assert resp.get_json() == {"inserted": 1500, "skipped": 0}
-    assert len(client.get("/api/records").get_json()) == 1500
+    assert resp.get_json() == {"inserted": 1500, "updated": 0, "skipped": 0}
+    assert len(_usage_rows()) == 1500
 
 
 # ---------------------------------------------------------------------------
@@ -123,13 +160,12 @@ def _quota(window_type: str, timestamp: str, **overrides) -> dict:
         "timestamp": timestamp,
         "percent_used": 0.42,
         "resets_at": "2026-06-16T17:00:00.000Z",
-        "source": "test-laptop",
     }
     base.update(overrides)
     return base
 
 
-def test_quota_post_inserts_and_get_returns(client):
+def test_quota_post_inserts(client):
     snapshots = [
         _quota("session", "2026-06-16T12:00:00.000Z"),
         _quota("weekly", "2026-06-16T12:00:00.000Z", percent_used=0.1),
@@ -137,24 +173,17 @@ def test_quota_post_inserts_and_get_returns(client):
     resp = client.post("/api/quota_snapshots", json=snapshots)
     assert resp.status_code == 200
     assert resp.get_json() == {"inserted": 2, "skipped": 0}
-
-    body = client.get("/api/quota_snapshots").get_json()
-    assert len(body) == 2
-    assert {r["window_type"] for r in body} == {"session", "weekly"}
-    session_row = next(r for r in body if r["window_type"] == "session")
-    assert session_row["percent_used"] == 0.42
-    assert session_row["timestamp"] == "2026-06-16T12:00:00.000Z"
-    assert session_row["resets_at"] == "2026-06-16T17:00:00.000Z"
-    assert session_row["source"] == "test-laptop"
+    assert sorted(_quota_rows()) == [
+        ("session", "2026-06-16T12:00:00.000Z"),
+        ("weekly", "2026-06-16T12:00:00.000Z"),
+    ]
 
 
 def test_quota_post_is_idempotent_by_window_type_and_timestamp(client):
     snap = _quota("session", "2026-06-16T12:00:00.000Z")
     assert client.post("/api/quota_snapshots", json=[snap]).get_json() == {"inserted": 1, "skipped": 0}
-    # Re-posting the same (window_type, timestamp) is a no-op — covers retries and
-    # multiple laptops polling the same account a moment apart.
     assert client.post("/api/quota_snapshots", json=[snap]).get_json() == {"inserted": 0, "skipped": 1}
-    assert len(client.get("/api/quota_snapshots").get_json()) == 1
+    assert len(_quota_rows()) == 1
 
 
 def test_quota_post_stores_only_changes_and_a_periodic_heartbeat(client):
@@ -170,27 +199,12 @@ def test_quota_post_stores_only_changes_and_a_periodic_heartbeat(client):
     for snapshot in posts:
         client.post("/api/quota_snapshots", json=[snapshot])
 
-    stored = [(q["window_type"], q["timestamp"]) for q in client.get("/api/quota_snapshots").get_json()]
-    assert stored == [
+    assert _quota_rows() == [
         ("session", "2026-06-16T12:00:00.000Z"),
         ("weekly", "2026-06-16T12:01:00.000Z"),
         ("session", "2026-06-16T12:02:00.000Z"),
         ("session", "2026-06-16T12:12:00.000Z"),
     ]
-
-
-def test_quota_get_filters_by_window_type_and_since(client):
-    client.post(
-        "/api/quota_snapshots",
-        json=[
-            _quota("session", "2026-06-16T12:00:00.000Z"),
-            _quota("weekly", "2026-06-16T12:00:00.000Z"),
-            _quota("session", "2026-06-10T00:00:00.000Z"),
-        ],
-    )
-    body = client.get("/api/quota_snapshots?window_type=session&since=2026-06-15T00:00:00Z").get_json()
-    assert len(body) == 1
-    assert body[0]["timestamp"] == "2026-06-16T12:00:00.000Z"
 
 
 def test_quota_post_rejects_non_array(client):
@@ -200,10 +214,6 @@ def test_quota_post_rejects_non_array(client):
 def test_quota_post_skips_missing_fields(client):
     resp = client.post("/api/quota_snapshots", json=[{"window_type": "session"}])
     assert resp.get_json() == {"inserted": 0, "skipped": 0}
-
-
-def test_quota_get_rejects_invalid_since(client):
-    assert client.get("/api/quota_snapshots?since=not-a-timestamp").status_code == 400
 
 
 # ---------------------------------------------------------------------------
@@ -232,8 +242,6 @@ def test_analytics_returns_expected_shape_on_empty_db(client):
         "lifetime_cost",
         "cache_hit_rate",
         "cache_savings_usd",
-        "total_web_searches",
-        "total_web_fetches",
     ):
         assert key in body
 
@@ -452,7 +460,7 @@ def test_analytics_breakdowns_span_monthly_window(client):
             _record(
                 "weekly",
                 "2026-06-09T00:00:00.000Z",  # inside the 7-day window
-                project="ProjWeekly",
+                cwd="/code/ProjWeekly",
                 input_tokens=100,
                 output_tokens=0,
                 cache_creation_tokens=0,
@@ -461,7 +469,7 @@ def test_analytics_breakdowns_span_monthly_window(client):
             _record(
                 "monthly-only",
                 "2026-05-20T00:00:00.000Z",  # older than weekly, inside monthly
-                project="ProjMonthly",
+                cwd="/code/ProjMonthly",
                 input_tokens=900,
                 output_tokens=0,
                 cache_creation_tokens=0,
@@ -661,13 +669,15 @@ def test_post_records_tags_metrics_with_device_and_counts_rejected(client, monke
     headers = {"X-Device-Name": "Mohit%E2%80%99s%20Air"}
 
     client.post(
-        "/api/records", json=[_record("uuid-a", "2026-06-09T12:00:00.000Z"), {"no": "uuid"}], headers=headers
+        "/api/records",
+        json=[_record("req-a", "2026-06-09T12:00:00.000Z"), {"no": "request_id"}],
+        headers=headers,
     )
     client.post("/api/records", json={"not": "an array"}, headers=headers)
 
     metrics.increment.assert_any_call("records_inserted", 1, tags={"device": "Mohit’s Air"})
     metrics.increment.assert_any_call(
-        "payload_rejected", 1, tags={"device": "Mohit’s Air", "reason": "missing_uuid"}
+        "payload_rejected", 1, tags={"device": "Mohit’s Air", "reason": "missing_request_id"}
     )
     metrics.increment.assert_any_call(
         "payload_rejected", tags={"device": "Mohit’s Air", "reason": "not_array"}

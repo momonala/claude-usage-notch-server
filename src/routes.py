@@ -1,11 +1,10 @@
 """HTTP routes.
 
 GET  /status                                          liveness check
-POST /api/records                                     upsert a batch of records (idempotent by uuid)
-GET  /api/records?since=ISO                           records with timestamp >= since
+POST /api/records                                     upsert a batch of JSONL lines as one row per
+                                                      request (idempotent by request_id)
 POST /api/quota_snapshots                             upsert a batch of polled quota readings
                                                       (idempotent by window_type+timestamp)
-GET  /api/quota_snapshots?window_type=&since=ISO       quota readings with timestamp >= since
 GET  /api/analytics?session_since=&session_cost_since=&weekly_since=&month_since=&lookback_since=&granularity=
                                                       pre-aggregated chart data
 """
@@ -41,13 +40,6 @@ from src.telemetry import metrics
 logger = logging.getLogger(__name__)
 
 bp = Blueprint("api", __name__)
-
-
-def _filter_since(stmt, column, since_raw: str | None):
-    """Narrow `stmt` to rows at or after `since_raw`. Raises ValueError if unparseable."""
-    if not since_raw:
-        return stmt
-    return stmt.where(column >= parse_timestamp(since_raw))
 
 
 def _device() -> str:
@@ -113,26 +105,8 @@ def post_records():
     metrics.increment("records_inserted", counts["inserted"], tags=tags)
     metrics.increment("records_skipped", counts["skipped"], tags=tags)
     if invalid:
-        metrics.increment("payload_rejected", invalid, tags={**tags, "reason": "missing_uuid"})
+        metrics.increment("payload_rejected", invalid, tags={**tags, "reason": "missing_request_id"})
     return jsonify(counts)
-
-
-@bp.get("/api/records")
-def get_records():
-    since_raw = request.args.get("since")
-    try:
-        stmt = _filter_since(
-            select(*UsageRecord.client_columns()).order_by(UsageRecord.timestamp),
-            UsageRecord.timestamp,
-            since_raw,
-        )
-    except ValueError:
-        return jsonify({"error": f"invalid 'since' timestamp: {since_raw}"}), 400
-
-    with session_scope() as session:
-        rows = session.execute(stmt).all()
-        logger.info("GET /api/records: since=%s returned=%d", since_raw, len(rows))
-        return jsonify([UsageRecord.row_to_json(row) for row in rows])
 
 
 @bp.post("/api/quota_snapshots")
@@ -175,29 +149,6 @@ def post_quota_snapshots():
     logger.debug("POST /api/quota_snapshots: inserted=%d skipped=%d", counts["inserted"], counts["skipped"])
     metrics.increment("quota_snapshots_inserted", counts["inserted"], tags=tags)
     return jsonify(counts)
-
-
-@bp.get("/api/quota_snapshots")
-def get_quota_snapshots():
-    since_raw = request.args.get("since")
-    window_type = request.args.get("window_type")
-    stmt = select(*QuotaSnapshot.client_columns()).order_by(QuotaSnapshot.timestamp)
-    if window_type:
-        stmt = stmt.where(QuotaSnapshot.window_type == window_type)
-    try:
-        stmt = _filter_since(stmt, QuotaSnapshot.timestamp, since_raw)
-    except ValueError:
-        return jsonify({"error": f"invalid 'since' timestamp: {since_raw}"}), 400
-
-    with session_scope() as session:
-        rows = session.execute(stmt).all()
-        logger.info(
-            "GET /api/quota_snapshots: window_type=%s since=%s returned=%d",
-            window_type,
-            since_raw,
-            len(rows),
-        )
-        return jsonify([QuotaSnapshot.row_to_json(row) for row in rows])
 
 
 @bp.get("/api/analytics")
