@@ -9,6 +9,7 @@ from src.weekly_report import build_report
 from src.weekly_report import load
 from src.weekly_report import model_label
 from src.weekly_report import rates_for
+from src.weekly_report import render
 from tests.test_routes import _quota
 from tests.test_routes import _record
 
@@ -149,3 +150,10 @@ def test_since_drops_limit_windows_that_start_before_it(post, tmp_path):
     requests, quota = load(str(tmp_path / "test.db"), "2026-09-03", WORK_PATHS)
 
     assert build_report(requests, quota)["limits"] == []
+
+
+def test_render_cannot_close_the_script_tag():
+    html = render({"model": "</script><script>alert(1)</script>"})
+
+    assert "</script><script>alert(1)" not in html
+    assert "\\u003c/script>\\u003cscript>alert(1)" in html

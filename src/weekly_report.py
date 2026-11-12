@@ -374,7 +374,7 @@ def build_report(requests: list[Request], quota: list[sqlite3.Row]) -> dict:
 
 
 def render(report: dict) -> str:
-    return TEMPLATE_PATH.read_text().replace("__REPORT__", json.dumps(report))
+    return TEMPLATE_PATH.read_text().replace("__REPORT__", json.dumps(report).replace("<", "\\u003c"))
 
 
 def weekly_report_cli(

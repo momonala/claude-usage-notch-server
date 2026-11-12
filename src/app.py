@@ -22,6 +22,7 @@ logging.getLogger("apscheduler").setLevel(logging.WARNING)
 
 def create_app() -> Flask:
     app = Flask(__name__)
+    app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024
     app.register_blueprint(bp)
     init_db()
     scheduler = BackgroundScheduler()

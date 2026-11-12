@@ -81,6 +81,11 @@ def test_health(client):
     assert resp.get_json() == {"status": "ok"}
 
 
+def test_oversized_body_is_rejected(client):
+    resp = client.post("/api/records", data=b"x" * (5 * 1024 * 1024 + 1), content_type="application/json")
+    assert resp.status_code == 413
+
+
 def test_post_inserts_one_row_per_request(client):
     records = [
         _record("req-a", "2026-06-09T12:00:00.000Z"),
